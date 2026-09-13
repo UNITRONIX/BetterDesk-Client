@@ -60,7 +60,9 @@ fn make_tray() -> hbb_common::ResultType<()> {
     let icon = tray_icon::Icon::from_rgba(icon_rgba, icon_width, icon_height)
         .context("Failed to open icon")?;
 
-    let mut event_loop = EventLoopBuilder::new().build();
+    let event_loop = EventLoopBuilder::new().build();
+    #[cfg(target_os = "macos")]
+    let mut event_loop = event_loop;
 
     let tray_menu = Menu::new();
     let hide_stop_service = crate::ui_interface::get_builtin_option(

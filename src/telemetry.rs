@@ -562,7 +562,7 @@ fn read_file(args: &Value) -> Value {
             "path": path.to_string_lossy(),
             "offset": start,
             "total": bytes.len(),
-            "data": hbb_common::base64::encode(&bytes[start..end]),
+            "data": STANDARD.encode(&bytes[start..end]),
         },
     })
 }

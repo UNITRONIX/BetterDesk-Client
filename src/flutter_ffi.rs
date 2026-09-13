@@ -1046,7 +1046,9 @@ pub fn main_get_options_sync() -> SyncReturn<String> {
 }
 
 pub fn main_set_options(json: String) {
-    let mut map: HashMap<String, String> = serde_json::from_str(&json).unwrap_or(HashMap::new());
+    let map: HashMap<String, String> = serde_json::from_str(&json).unwrap_or(HashMap::new());
+    #[cfg(target_os = "android")]
+    let mut map = map;
     #[cfg(target_os = "android")]
     {
         let allow_perm_change_in_accept_window = config::option2bool(

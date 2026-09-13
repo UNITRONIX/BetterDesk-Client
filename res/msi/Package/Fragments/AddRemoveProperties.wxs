@@ -10,6 +10,7 @@
 		<Property Id="STOP_SERVICE" Value="&apos;Y&apos;" />
 
 		<Property Id="LAUNCH_TRAY_APP" Value="Y" />
+		<Property Id="LAUNCH_MAIN_APP" Value="N" />
 
 		<!--
 		Support entries shown when clicking "Click here for support information"

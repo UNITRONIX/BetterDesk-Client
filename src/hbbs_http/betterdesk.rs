@@ -128,6 +128,7 @@ fn api_base() -> String {
 }
 
 /// GET `{api}/api/health` — returns Ok(json) when API is reachable.
+#[allow(dead_code)]
 pub async fn fetch_health() -> ResultType<Value> {
     let base = api_base();
     if base.is_empty() {
@@ -165,6 +166,7 @@ pub async fn fetch_branding() -> ResultType<Value> {
 }
 
 /// GET `{api}/api/server-key` — public key helpers for Network auto-fill UX.
+#[allow(dead_code)]
 pub async fn fetch_server_key() -> ResultType<String> {
     let base = api_base();
     if base.is_empty() {

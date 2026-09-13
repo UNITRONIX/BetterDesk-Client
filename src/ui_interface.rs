@@ -883,7 +883,12 @@ pub fn http_request(url: String, method: String, body: Option<String>, header: S
         let res = match crate::http_request_sync(url.clone(), method, body, header) {
             Err(err) => {
                 log::error!("{}", err);
-                err.to_string()
+                serde_json::json!({
+                    "status_code": 0,
+                    "headers": {},
+                    "body": err.to_string(),
+                })
+                .to_string()
             }
             Ok(text) => text,
         };
@@ -1080,6 +1085,7 @@ pub enum DeployResult {
 }
 
 impl DeployResult {
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub fn message(&self) -> String {
         match self {
             Self::Ok => "".to_owned(),

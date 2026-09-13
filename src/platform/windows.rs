@@ -132,9 +132,11 @@ fn validate_install_app_name(app_name: &str) -> ResultType<()> {
     if app_name.is_empty()
         || !app_name
             .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+            .all(|character| {
+                character.is_ascii_alphanumeric() || character == '-' || character == ' '
+            })
     {
-        bail!("Application name must match [a-zA-Z0-9-]+");
+        bail!("Application name must contain only ASCII letters, numbers, spaces, or '-'");
     }
     Ok(())
 }
@@ -3246,7 +3248,7 @@ impl Drop for WakeLock {
 // Returns `false` if another tray process is already running in this session.
 pub fn try_lock_tray_single_instance() -> bool {
     use winapi::um::{
-        errhandlingapi::{GetLastError, SetLastError},
+        errhandlingapi::SetLastError,
         synchapi::CreateMutexW,
     };
     // `Local\` is the per session namespace, so the name is scoped to this
@@ -3359,7 +3361,7 @@ pub fn install_service() -> bool {
         log::debug!("{err}");
         return true;
     }
-    run_after_run_cmds(false);
+    run_after_run_cmds(true);
     std::process::exit(0);
 }
 
@@ -3949,7 +3951,14 @@ if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{ap
     } else {
         let exe = escape_nested_cmd_ampersands(exe);
         format!("
-sc create {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
+sc query {app_name} >nul 2>&1
+if errorlevel 1 (
+    sc create {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
+) else (
+    sc config {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto
+)
+sc failure {app_name} reset= 86400 actions= restart/5000/restart/10000/restart/30000
+sc failureflag {app_name} 1
 sc start {app_name}
 ",
     app_name = crate::get_app_name())
@@ -4194,7 +4203,6 @@ pub fn try_kill_rustdesk_main_window_process() -> ResultType<()> {
     // We can find the exact process which occupies the ipc, see more from https://github.com/winsiderss/systeminformer
     let app_name = crate::get_exe_name();
     log::info!("try kill main window process");
-    use hbb_common::sysinfo::System;
     let mut sys = System::new();
     sys.refresh_processes();
     let my_uid = sys
@@ -4847,6 +4855,7 @@ mod tests {
     #[test]
     fn install_app_names_enforce_ascii_command_safety() {
         assert!(validate_install_app_name("RustDesk-Admin1").is_ok());
+        assert!(validate_install_app_name("BetterDesk Client").is_ok());
         for app_name in ["", "RustDesk_Admin", "RustDesk&whoami", "RustDesk应用"] {
             assert!(
                 validate_install_app_name(app_name).is_err(),

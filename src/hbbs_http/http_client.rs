@@ -139,6 +139,7 @@ pub fn create_http_client_with_url(url: &str) -> SyncClient {
     )
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn create_http_client_with_url_strict(url: &str) -> ResultType<SyncClient> {
     let parsed_url = url::Url::parse(url)?;
     if parsed_url.scheme() != "https" {

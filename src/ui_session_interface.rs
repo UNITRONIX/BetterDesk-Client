@@ -38,8 +38,6 @@ use std::{
     },
     time::SystemTime,
 };
-use uuid::Uuid;
-
 use crate::client::io_loop::Remote;
 use crate::client::{
     check_if_retry, handle_hash, handle_login_error, handle_login_from_ui, handle_test_delay,
@@ -1495,6 +1493,8 @@ impl<T: InvokeUiSession> Session<T> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[tokio::main(flavor = "current_thread")]
     pub async fn switch_sides(&self) {
+        use uuid::Uuid;
+
         match crate::ipc::connect(1000, "").await {
             Ok(mut conn) => {
                 if conn

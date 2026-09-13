@@ -12,8 +12,10 @@ pub mod sync;
 pub use http_client::{
     create_http_client_async, create_http_client_async_with_url,
     create_http_client_async_with_url_strict, create_http_client_with_url,
-    create_http_client_with_url_strict, get_url_for_tls,
+    get_url_for_tls,
 };
+#[cfg(target_os = "macos")]
+pub use http_client::create_http_client_with_url_strict;
 
 #[derive(Debug)]
 pub enum HbbHttpResponse<T> {

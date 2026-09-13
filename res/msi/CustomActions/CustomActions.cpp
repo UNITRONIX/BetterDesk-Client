@@ -900,6 +900,19 @@ void TryCreateStartServiceByShell(LPWSTR svcName, LPWSTR svcBinary, LPWSTR szSvc
         WcaLog(LOGMSG_STANDARD, "Service \"%ls\" is created with shell.", svcName);
     }
 
+    hr = StringCchPrintfW(
+        szCmd,
+        cchCmd,
+        L"failure %ls reset= 86400 actions= restart/5000/restart/10000/restart/30000",
+        svcName);
+    if (SUCCEEDED(hr)) {
+        ShellExecuteW(NULL, L"open", L"sc", szCmd, NULL, SW_HIDE);
+    }
+    hr = StringCchPrintfW(szCmd, cchCmd, L"failureflag %ls 1", svcName);
+    if (SUCCEEDED(hr)) {
+        ShellExecuteW(NULL, L"open", L"sc", szCmd, NULL, SW_HIDE);
+    }
+
     // Query and log if the service is running.
     for (int k = 0; k < 10; ++k) {
         if (!QueryServiceStatusExW(svcName, &svcStatus)) {

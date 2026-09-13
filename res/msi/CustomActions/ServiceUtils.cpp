@@ -6,6 +6,40 @@
 #include <Windows.h>
 #include <strsafe.h>
 
+void ConfigureServiceRecovery(SC_HANDLE service, LPCWSTR serviceName)
+{
+    SC_ACTION actions[3] = {
+        { SC_ACTION_RESTART, 5000 },
+        { SC_ACTION_RESTART, 10000 },
+        { SC_ACTION_RESTART, 30000 },
+    };
+    SERVICE_FAILURE_ACTIONSW failureActions = {};
+    failureActions.dwResetPeriod = 24 * 60 * 60;
+    failureActions.cActions = ARRAYSIZE(actions);
+    failureActions.lpsaActions = actions;
+
+    if (!ChangeServiceConfig2W(
+            service,
+            SERVICE_CONFIG_FAILURE_ACTIONS,
+            &failureActions)) {
+        WcaLog(LOGMSG_STANDARD,
+            "Failed to configure recovery for service %ls (%lu)",
+            serviceName,
+            GetLastError());
+    }
+
+    SERVICE_FAILURE_ACTIONS_FLAG failureFlag = { TRUE };
+    if (!ChangeServiceConfig2W(
+            service,
+            SERVICE_CONFIG_FAILURE_ACTIONS_FLAG,
+            &failureFlag)) {
+        WcaLog(LOGMSG_STANDARD,
+            "Failed to enable recovery for service %ls (%lu)",
+            serviceName,
+            GetLastError());
+    }
+}
+
 bool MyCreateServiceW(LPCWSTR serviceName, LPCWSTR displayName, LPCWSTR binaryPath)
 {
     SC_HANDLE schSCManager;
@@ -46,6 +80,7 @@ bool MyCreateServiceW(LPCWSTR serviceName, LPCWSTR displayName, LPCWSTR binaryPa
     }
     else
     {
+        ConfigureServiceRecovery(schService, serviceName);
         WcaLog(LOGMSG_STANDARD, "Service installed successfully\n");
     }
 

@@ -2,6 +2,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     println,
+    process::Command,
 };
 
 #[cfg(all(target_os = "linux", feature = "linux-pkg-config"))]
@@ -180,6 +181,28 @@ fn gen_vcpkg_package(package: &str, ffi_header: &str, generated: &str, regex: &s
     generate_bindings(&ffi_header, &includes, &ffi_rs, &exact_file, regex);
 }
 
+fn rustc_supports_check_cfg() -> bool {
+    let rustc = env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let Ok(output) = Command::new(rustc).arg("--version").output() else {
+        return false;
+    };
+    let version_output = String::from_utf8_lossy(&output.stdout);
+    let Some(version) = version_output
+        .split_whitespace()
+        .nth(1)
+    else {
+        return false;
+    };
+    let mut components = version.split('.');
+    let Ok(major) = components.next().unwrap_or_default().parse::<u32>() else {
+        return false;
+    };
+    let Ok(minor) = components.next().unwrap_or_default().parse::<u32>() else {
+        return false;
+    };
+    major > 1 || (major == 1 && minor >= 80)
+}
+
 // If you have problems installing ffmpeg, you can download $VCPKG_ROOT/installed from ci
 // Linux require link in hwcodec
 /*
@@ -228,7 +251,9 @@ fn ffmpeg() {
 
 fn main() {
     // in this crate, these are also valid configurations
-    println!("cargo:rustc-check-cfg=cfg(dxgi,quartz,x11)");
+    if rustc_supports_check_cfg() {
+        println!("cargo:rustc-check-cfg=cfg(dxgi,quartz,x11)");
+    }
 
     // there is problem with cfg(target_os) in build.rs, so use our workaround
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();

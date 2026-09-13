@@ -1,7 +1,9 @@
+#[cfg(target_os = "macos")]
 use crate::{common::do_check_software_update, hbbs_http::create_http_client_with_url_strict};
-use hbb_common::{bail, config, log, ResultType};
+#[cfg(target_os = "macos")]
+use hbb_common::{bail, config};
+use hbb_common::{log, ResultType};
 use std::{
-    io::Write,
     path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -179,6 +181,7 @@ fn check_update(manually: bool) -> ResultType<()> {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn update_new_version(update_msi: bool, version: &str, file_path: &PathBuf) {
     log::debug!(
         "New version is downloaded, update begin, update msi: {update_msi}, version: {version}, file: {:?}",

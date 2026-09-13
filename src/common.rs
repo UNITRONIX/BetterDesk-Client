@@ -11,17 +11,17 @@ use serde_json::{json, Map, Value};
 #[cfg(not(target_os = "ios"))]
 use hbb_common::whoami;
 use hbb_common::{
-    allow_err,
     anyhow::{anyhow, Context},
     async_recursion::async_recursion,
-    bail, base64,
+    bail,
+    base64::{self, Engine as _},
     bytes::Bytes,
     config::{
         self, keys, use_ws, Config, LocalConfig, CONNECT_TIMEOUT, READ_TIMEOUT, RENDEZVOUS_PORT,
     },
     futures::future::join_all,
     futures_util::future::poll_fn,
-    get_version_number, log,
+    log,
     message_proto::*,
     protobuf::{Enum, Message as _},
     rendezvous_proto::*,
@@ -39,7 +39,7 @@ use hbb_common::{
 
 use crate::{
     hbbs_http::{create_http_client_async, get_url_for_tls},
-    ui_interface::{get_api_server as ui_get_api_server, get_option, is_installed, set_option},
+    ui_interface::{get_api_server as ui_get_api_server, get_option, set_option},
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1451,6 +1451,8 @@ fn betterdesk_api_url(url: &str) -> bool {
         "/api/login",
         "/api/login-options",
         "/api/logout",
+        "/api/currentUser",
+        "/api/ab",
         "/api/oidc/",
         "/api/devices/register",
         "/api/devices/deploy",
@@ -1519,7 +1521,7 @@ fn unwrap_betterdesk_response(body: String) -> ResultType<String> {
             .get("body")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("BetterDesk secure response body missing"))?;
-        let bytes = base64::decode(encoded)?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
         return Ok(String::from_utf8_lossy(&bytes).to_string());
     }
     Ok(serde_json::to_string(&response)?)
@@ -1852,7 +1854,7 @@ pub async fn http_request_sync(
     header: String,
 ) -> ResultType<String> {
     #[cfg(not(target_os = "ios"))]
-    if betterdesk_api_url(&url) && !url.ends_with("/api/telemetry/key") {
+    if betterdesk_api_url(&url) {
         let payload = body
             .as_deref()
             .and_then(|value| serde_json::from_str::<Value>(value).ok())
@@ -1920,7 +1922,9 @@ fn unwrap_betterdesk_http_response(response: String) -> ResultType<String> {
             .get("body")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("BetterDesk secure response body missing"))?;
-        outer["body"] = json!(String::from_utf8_lossy(&base64::decode(encoded)?));
+        outer["body"] = json!(String::from_utf8_lossy(
+            &base64::engine::general_purpose::STANDARD.decode(encoded)?
+        ));
         return Ok(serde_json::to_string(&outer)?);
     }
     outer["body"] = json!(serde_json::to_string(&decrypted)?);
@@ -2058,14 +2062,12 @@ pub fn handle_url_scheme(url: String) {
 
 #[inline]
 pub fn encode64<T: AsRef<[u8]>>(input: T) -> String {
-    #[allow(deprecated)]
-    base64::encode(input)
+    base64::engine::general_purpose::STANDARD.encode(input)
 }
 
 #[inline]
 pub fn decode64<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>, base64::DecodeError> {
-    #[allow(deprecated)]
-    base64::decode(input)
+    base64::engine::general_purpose::STANDARD.decode(input)
 }
 
 pub async fn get_key(sync: bool) -> String {
@@ -2607,7 +2609,6 @@ pub fn is_udp_disabled() -> bool {
 
 // this crate https://github.com/yoshd/stun-client supports nat type
 async fn stun_ipv6_test(stun_server: &str) -> ResultType<(SocketAddr, String)> {
-    use std::net::ToSocketAddrs;
     use stunclient::StunClient;
     let local_addr = SocketAddr::from(([0u16; 8], 0)); // [::]:0
     let socket = UdpSocket::bind(&local_addr).await?;
@@ -2631,7 +2632,6 @@ async fn stun_ipv6_test(stun_server: &str) -> ResultType<(SocketAddr, String)> {
 }
 
 async fn stun_ipv4_test(stun_server: &str) -> ResultType<(SocketAddr, String)> {
-    use std::net::ToSocketAddrs;
     use stunclient::StunClient;
     let local_addr = SocketAddr::from(([0u8; 4], 0));
     let socket = UdpSocket::bind(&local_addr).await?;
@@ -2893,7 +2893,6 @@ pub fn get_control_permission(
     permissions: u64,
     permission: hbb_common::rendezvous_proto::control_permissions::Permission,
 ) -> Option<bool> {
-    use hbb_common::protobuf::Enum;
     let index = permission.value();
     if index >= 0 && index < 32 {
         let shift = index * 2;
