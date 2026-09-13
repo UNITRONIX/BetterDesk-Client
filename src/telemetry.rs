@@ -23,12 +23,14 @@ use serde_json::{json, Value};
 lazy_static::lazy_static! {
     static ref SEEN_COMMANDS: Mutex<HashSet<i64>> = Mutex::new(HashSet::new());
     static ref LAST_ACTIVITY_COLLECTION: Mutex<Option<Instant>> = Mutex::new(None);
+    static ref LAST_HARDWARE_COLLECTION: Mutex<Option<Instant>> = Mutex::new(None);
 }
 
 const MAX_PROCESS_ROWS: usize = 500;
 const MAX_DIRECTORY_ROWS: usize = 500;
 const MAX_COMMAND_OUTPUT: usize = 16 * 1024;
 const MAX_FILE_READ: usize = 1024 * 1024;
+const HARDWARE_COLLECTION_INTERVAL: Duration = Duration::from_secs(3600);
 const TELEMETRY_SEQUENCE: &str = "betterdesk-telemetry-sequence";
 const RESPONSE_PUBLIC_KEY: &str = "betterdesk-telemetry-response-public-key";
 const RESPONSE_SECRET_KEY: &str = "betterdesk-telemetry-response-secret-key";
@@ -81,6 +83,32 @@ pub fn heartbeat() -> Value {
         "metrics": metrics,
         "status": status,
     });
+
+    let mut snapshots = Vec::new();
+    let should_collect_hardware = match LAST_HARDWARE_COLLECTION.lock() {
+        Ok(mut last) => {
+            if last
+                .map(|value| value.elapsed() >= HARDWARE_COLLECTION_INTERVAL)
+                .unwrap_or(true)
+            {
+                *last = Some(Instant::now());
+                true
+            } else {
+                false
+            }
+        }
+        Err(_) => false,
+    };
+    if should_collect_hardware {
+        snapshots.push(json!({
+            "kind": "hardware",
+            "sample_id": uuid::Uuid::new_v4().to_string(),
+            "status": "ok",
+            "collected_at": now_rfc3339(),
+            "data": crate::common::get_sysinfo(),
+        }));
+    }
+
     if Config::get_option("telemetry-activity-enabled") == "Y" {
         let should_collect = match LAST_ACTIVITY_COLLECTION.lock() {
             Ok(mut last) => {
@@ -97,8 +125,11 @@ pub fn heartbeat() -> Value {
             Err(_) => false,
         };
         if should_collect {
-            payload["snapshots"] = json!([collect_activity()]);
+            snapshots.push(collect_activity());
         }
+    }
+    if !snapshots.is_empty() {
+        payload["snapshots"] = Value::Array(snapshots);
     }
     payload
 }
