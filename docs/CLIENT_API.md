@@ -427,6 +427,19 @@ Larger hardware, service, process, event, activity, and file snapshots are
 requested through the server's allowlisted telemetry command queue and returned
 on a later heartbeat.
 
+Telemetry payloads are sent independently from the short liveness heartbeat:
+each device sends a telemetry sample no more often than once every 60–90
+seconds, with a stable per-device jitter to avoid synchronized load spikes.
+Command results are sent on the next heartbeat so server-requested collections
+are not delayed by this interval.
+
+Background enrollment, sysinfo, heartbeat, and telemetry do not require an
+account `access_token`; they authenticate the device through its configured
+BetterDesk server identity and telemetry envelope. Account-only endpoints such
+as `/api/ab` and group synchronization are not called during anonymous startup.
+The BetterDesk custom client enables its server-managed capabilities from the
+client identity rather than waiting for an account session.
+
 Activity collection is opt-in through the local
 `telemetry-activity-enabled=Y` option and reports application/window metadata
 only. It does not collect URLs, document contents, keystrokes, screenshots, or

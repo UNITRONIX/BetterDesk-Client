@@ -18,8 +18,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const TIME_HEARTBEAT: Duration = Duration::from_secs(15);
+const TIME_TELEMETRY: Duration = Duration::from_secs(60);
+const TELEMETRY_JITTER_SECS: u64 = 30;
 const UPLOAD_SYSINFO_TIMEOUT: Duration = Duration::from_secs(120);
 const TIME_CONN: Duration = Duration::from_secs(3);
+
+fn telemetry_interval(device_id: &str) -> Duration {
+    let jitter = device_id.bytes().fold(0_u64, |value, byte| {
+        value.wrapping_mul(31).wrapping_add(byte as u64)
+    }) % (TELEMETRY_JITTER_SECS + 1);
+    TIME_TELEMETRY + Duration::from_secs(jitter)
+}
 
 #[cfg(not(any(target_os = "ios")))]
 lazy_static::lazy_static! {
@@ -92,6 +101,7 @@ async fn start_hbbs_sync_async() {
         TIME_CONN,
     ));
     let mut last_sent: Option<Instant> = None;
+    let mut last_telemetry_sent: Option<Instant> = None;
     let mut info_uploaded = InfoUploaded::default();
     let mut sysinfo_ver = "".to_owned();
     let mut telemetry_results: Vec<Value> = Vec::new();
@@ -251,30 +261,55 @@ async fn start_hbbs_sync_async() {
                 let modified_at = LocalConfig::get_option("strategy_timestamp").parse::<i64>().unwrap_or(0);
                 v["modified_at"] = json!(modified_at);
                 crate::hbbs_http::betterdesk::merge_device_identity(&mut v);
-                v["telemetry_schema"] = json!(1);
-                let mut telemetry_payload = telemetry::heartbeat();
-                if !telemetry_results.is_empty() {
-                    telemetry_payload["results"] = Value::Array(std::mem::take(&mut telemetry_results));
+                let telemetry_due = !telemetry_results.is_empty()
+                    || last_telemetry_sent
+                        .map(|sent| sent.elapsed() >= telemetry_interval(&id))
+                        .unwrap_or(true);
+                if telemetry_due {
+                    v["telemetry_schema"] = json!(1);
+                    let mut telemetry_payload = telemetry::heartbeat();
+                    if !telemetry_results.is_empty() {
+                        telemetry_payload["results"] =
+                            Value::Array(std::mem::take(&mut telemetry_results));
+                    }
+                    v["telemetry"] = telemetry_payload;
+                    last_telemetry_sent = Some(Instant::now());
                 }
-                v["telemetry"] = telemetry_payload;
                 let mut request = v.clone();
                 let telemetry_base = url.trim_end_matches("/api/heartbeat");
-                if let Ok((key_id, public_key)) =
-                    crate::hbbs_http::betterdesk::fetch_telemetry_server_key().await
-                {
-                    if let Ok(envelope) = telemetry::seal_payload(&v, &key_id, &public_key, &id) {
-                        request = json!({
-                            "id": id,
-                            "uuid": v["uuid"],
-                            "betterdesk_envelope": envelope,
-                        });
-                    } else if telemetry_base.starts_with("https://") {
-                        request = v.clone();
+                if telemetry_due {
+                    match crate::hbbs_http::betterdesk::fetch_telemetry_server_key().await {
+                        Ok((key_id, public_key)) => {
+                            match telemetry::seal_payload(&v, &key_id, &public_key, &id) {
+                                Ok(envelope) => {
+                                    request = json!({
+                                        "id": id,
+                                        "uuid": v["uuid"],
+                                        "betterdesk_envelope": envelope,
+                                    });
+                                }
+                                Err(err) => {
+                                    log::warn!("BetterDesk telemetry payload was not sealed: {err}");
+                                    if telemetry_base.starts_with("https://") {
+                                        request = v.clone();
+                                    }
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            log::debug!("BetterDesk telemetry key unavailable: {err}");
+                            if telemetry_base.starts_with("https://") {
+                                request = v.clone();
+                            }
+                        }
                     }
-                } else if telemetry_base.starts_with("https://") {
-                    request = v.clone();
                 }
                 if !telemetry_base.starts_with("https://") && request.get("betterdesk_envelope").is_none() {
+                    if telemetry_due {
+                        log::debug!(
+                            "BetterDesk telemetry omitted because the configured API is plain HTTP"
+                        );
+                    }
                     request = json!({
                         "id": id,
                         "uuid": v["uuid"],
@@ -386,7 +421,7 @@ fn handle_config_options(config_options: HashMap<String, String>) {
 #[allow(unused)]
 #[cfg(not(any(target_os = "ios")))]
 pub fn is_pro() -> bool {
-    PRO.lock().unwrap().clone()
+    *PRO.lock().unwrap() || crate::common::is_custom_client()
 }
 
 // Fire-and-forget by design: the switch flow must not block on this POST.
@@ -492,7 +527,21 @@ fn switch_grant_signed_msg(id: &str, switch_code_verifier: &str, timestamp: &str
     not(any(target_os = "android", target_os = "ios"))
 ))]
 mod tests {
-    use super::{switch_code_verifier, switch_grant_signed_msg};
+    use std::time::Duration;
+
+    use super::{
+        switch_code_verifier, switch_grant_signed_msg, telemetry_interval, TIME_TELEMETRY,
+    };
+
+    #[test]
+    fn telemetry_interval_is_spread_across_devices() {
+        let first = telemetry_interval("device-a");
+        let second = telemetry_interval("device-b");
+        assert!(first >= TIME_TELEMETRY);
+        assert!(first <= TIME_TELEMETRY + Duration::from_secs(30));
+        assert!(second >= TIME_TELEMETRY);
+        assert!(second <= TIME_TELEMETRY + Duration::from_secs(30));
+    }
 
     #[test]
     fn test_switch_code_verifier_is_not_raw_switch_code() {

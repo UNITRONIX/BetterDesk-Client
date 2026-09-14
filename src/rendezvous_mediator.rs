@@ -149,11 +149,20 @@ impl RendezvousMediator {
             let timeout = Arc::new(RwLock::new(CONNECT_TIMEOUT));
             let conn_start_time = Instant::now();
             *SOLVING_PK_MISMATCH.lock().await = "".to_owned();
+            Config::reset_online();
             if !config::option2bool("stop-service", &Config::get_option("stop-service"))
                 && !crate::platform::installing_service()
             {
                 let mut futs = Vec::new();
                 let servers = Config::get_rendezvous_servers();
+                if servers.is_empty() {
+                    Config::reset_online();
+                    log::error!(
+                        "No rendezvous server is configured; the device cannot be visible by ID"
+                    );
+                    sleep(5.).await;
+                    continue;
+                }
                 SHOULD_EXIT.store(false, Ordering::SeqCst);
                 MANUAL_RESTARTED.store(false, Ordering::SeqCst);
                 for host in servers.clone() {
@@ -366,6 +375,7 @@ impl RendezvousMediator {
                         // was deleted by an admin while running.
                         Config::set_key_confirmed(false);
                         Config::set_host_key_confirmed(&self.host_prefix, false);
+                        Config::update_latency(&self.host, -1);
                         #[cfg(target_os = "android")]
                         notify_android_needs_deploy();
                     }

@@ -161,6 +161,7 @@ class UserModel {
 
   // update ab and group status
   static Future<void> updateOtherModels() async {
+    if (!gFFI.userModel.isLogin) return;
     await Future.wait([
       gFFI.abModel.pullAb(force: ForcePullAb.listAndCurrent, quiet: false),
       gFFI.groupModel.pull()

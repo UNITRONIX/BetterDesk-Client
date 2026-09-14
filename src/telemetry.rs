@@ -4,7 +4,7 @@
 //! APIs become compact status codes instead of preventing the main heartbeat.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fs,
     path::PathBuf,
     process::Command,
@@ -24,6 +24,7 @@ lazy_static::lazy_static! {
     static ref SEEN_COMMANDS: Mutex<HashSet<i64>> = Mutex::new(HashSet::new());
     static ref LAST_ACTIVITY_COLLECTION: Mutex<Option<Instant>> = Mutex::new(None);
     static ref LAST_HARDWARE_COLLECTION: Mutex<Option<Instant>> = Mutex::new(None);
+    static ref ACTIVITY_WINDOW: Mutex<ActivityWindow> = Mutex::new(ActivityWindow::default());
 }
 
 const MAX_PROCESS_ROWS: usize = 500;
@@ -35,12 +36,41 @@ const TELEMETRY_SEQUENCE: &str = "betterdesk-telemetry-sequence";
 const RESPONSE_PUBLIC_KEY: &str = "betterdesk-telemetry-response-public-key";
 const RESPONSE_SECRET_KEY: &str = "betterdesk-telemetry-response-secret-key";
 
+#[derive(Default)]
+struct ActivityWindow {
+    last_sample: Option<Instant>,
+    last_app: Option<String>,
+    seconds: BTreeMap<String, u64>,
+}
+
 fn trim_output(value: String) -> String {
     value.chars().take(MAX_COMMAND_OUTPUT).collect()
 }
 
 fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+fn collect_disk_percent() -> Option<f64> {
+    let disks = hbb_common::sysinfo::Disks::new_with_refreshed_list();
+    let total = disks.iter().map(|disk| disk.total_space()).sum::<u64>();
+    let available = disks.iter().map(|disk| disk.available_space()).sum::<u64>();
+    if total == 0 {
+        None
+    } else {
+        Some(total.saturating_sub(available) as f64 / total as f64 * 100.0)
+    }
+}
+
+fn collect_network_metrics() -> Option<Value> {
+    let networks = hbb_common::sysinfo::Networks::new_with_refreshed_list();
+    if networks.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "received_bytes": networks.iter().map(|(_, network)| network.received()).sum::<u64>(),
+        "transmitted_bytes": networks.iter().map(|(_, network)| network.transmitted()).sum::<u64>(),
+    }))
 }
 
 pub fn heartbeat() -> Value {
@@ -63,17 +93,43 @@ pub fn heartbeat() -> Value {
     let mut status = serde_json::Map::new();
     status.insert("metrics".to_owned(), json!("ok"));
     status.insert("hardware".to_owned(), json!("ok"));
-    status.insert("services".to_owned(), json!("unavailable"));
-    status.insert("processes".to_owned(), json!("unavailable"));
-    status.insert("events".to_owned(), json!("unavailable"));
-    status.insert("activity".to_owned(), json!("permission_denied"));
+    status.insert("services".to_owned(), json!("on_demand"));
+    status.insert("processes".to_owned(), json!("on_demand"));
+    status.insert("events".to_owned(), json!("on_demand"));
+    status.insert(
+        "activity".to_owned(),
+        json!(if Config::get_option("telemetry-activity-enabled") == "Y" {
+            "on_demand"
+        } else {
+            "permission_denied"
+        }),
+    );
+    let disk_percent = collect_disk_percent();
+    let network = collect_network_metrics();
+    status.insert(
+        "disk".to_owned(),
+        json!(if disk_percent.is_some() {
+            "ok"
+        } else {
+            "unavailable"
+        }),
+    );
+    status.insert(
+        "network".to_owned(),
+        json!(if network.is_some() {
+            "ok"
+        } else {
+            "unavailable"
+        }),
+    );
+    status.insert("gpu".to_owned(), json!("unavailable"));
 
     let metrics = json!({
         "cpu_percent": cpu_percent,
         "memory_percent": memory_percent,
-        "disk_percent": Value::Null,
+        "disk_percent": disk_percent,
         "gpu_percent": Value::Null,
-        "network": Value::Null,
+        "network": network,
     });
 
     let mut payload = json!({
@@ -477,6 +533,46 @@ fn collect_events() -> Value {
     }
 }
 
+fn activity_snapshot(app_name: String) -> Value {
+    let now = Instant::now();
+    let mut window = match ACTIVITY_WINDOW.lock() {
+        Ok(window) => window,
+        Err(_) => {
+            return json!({
+                "kind": "activity",
+                "sample_id": uuid::Uuid::new_v4().to_string(),
+                "status": "unavailable",
+                "collected_at": now_rfc3339(),
+                "data": {},
+            });
+        }
+    };
+    let last_app = window.last_app.clone();
+    if let (Some(last_sample), Some(last_app)) = (window.last_sample, last_app) {
+        let seconds = now
+            .saturating_duration_since(last_sample)
+            .as_secs()
+            .min(300);
+        *window.seconds.entry(last_app).or_default() += seconds;
+    }
+    window.last_sample = Some(now);
+    window.last_app = Some(app_name.clone());
+    window.seconds.entry(app_name).or_default();
+    let apps = window
+        .seconds
+        .iter()
+        .map(|(name, seconds)| json!({"name": name, "seconds": seconds}))
+        .collect::<Vec<_>>();
+    window.seconds.clear();
+    json!({
+        "kind": "activity",
+        "sample_id": uuid::Uuid::new_v4().to_string(),
+        "status": "ok",
+        "collected_at": now_rfc3339(),
+        "data": {"apps": apps},
+    })
+}
+
 fn collect_activity() -> Value {
     let result = {
         #[cfg(windows)]
@@ -511,13 +607,9 @@ fn collect_activity() -> Value {
         }
     };
     match result {
-        Ok(app_name) if !app_name.trim().is_empty() => json!({
-            "kind": "activity",
-            "sample_id": uuid::Uuid::new_v4().to_string(),
-            "status": "ok",
-            "collected_at": now_rfc3339(),
-            "data": {"apps": [{"name": app_name.trim(), "seconds": 0}]},
-        }),
+        Ok(app_name) if !app_name.trim().is_empty() => {
+            activity_snapshot(app_name.trim().to_owned())
+        }
         Ok(_) => json!({
             "kind": "activity",
             "sample_id": uuid::Uuid::new_v4().to_string(),
@@ -778,6 +870,37 @@ mod tests {
         assert!(value["sample_id"].as_str().is_some());
         assert!(value["metrics"].is_object());
         assert!(value["status"].is_object());
+        assert!(
+            value["metrics"]["disk_percent"].is_number()
+                || value["metrics"]["disk_percent"].is_null()
+        );
+        assert!(value["metrics"]["network"].is_object() || value["metrics"]["network"].is_null());
+        assert_eq!(value["status"]["services"], "on_demand");
+        assert_eq!(value["status"]["processes"], "on_demand");
+        assert_eq!(value["status"]["events"], "on_demand");
+    }
+
+    #[test]
+    fn activity_snapshot_reports_elapsed_seconds() {
+        let first = activity_snapshot("first-app".to_owned());
+        assert_eq!(first["status"], "ok");
+        assert_eq!(first["data"]["apps"][0]["seconds"], 0);
+
+        let second = activity_snapshot("second-app".to_owned());
+        let apps = second["data"]["apps"].as_array().unwrap();
+        assert!(apps.iter().any(|app| app["name"] == "first-app"));
+        assert!(apps.iter().all(|app| app["seconds"].is_u64()));
+    }
+
+    #[test]
+    fn metrics_command_returns_snapshot() {
+        let results = process_commands(&[json!({
+            "id": 900_001,
+            "command": "collect.metrics",
+        })]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["status"], "ok");
+        assert_eq!(results[0]["result"]["snapshot"]["kind"], "metrics");
     }
 
     #[test]

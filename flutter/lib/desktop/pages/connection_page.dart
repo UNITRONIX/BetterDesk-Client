@@ -35,6 +35,7 @@ class OnlineStatusWidget extends StatefulWidget {
 class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
   final _svcStopped = Get.find<RxBool>(tag: 'stop-service');
   final _svcIsUsingPublicServer = true.obs;
+  final _statusReason = 'connecting'.obs;
   Timer? _updateTimer;
 
   double get em => 14.0;
@@ -151,14 +152,21 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
 
   _buildConnStatusMsg() {
     widget.onSvcStatusChanged?.call();
+    final statusMessage = _svcStopped.value
+        ? translate("Service is not running")
+        : stateGlobal.svcStatus.value == SvcStatus.connecting
+            ? translate("connecting_status")
+            : stateGlobal.svcStatus.value == SvcStatus.notReady &&
+                    _statusReason.value == 'deployment_required'
+                ? translate("server_requires_deployment_tip")
+                : stateGlobal.svcStatus.value == SvcStatus.notReady &&
+                        _statusReason.value == 'no_rendezvous_server'
+                    ? translate("Failed to connect to rendezvous server")
+                    : stateGlobal.svcStatus.value == SvcStatus.notReady
+                        ? translate("not_ready_status")
+                        : translate('Ready');
     return Text(
-      _svcStopped.value
-          ? translate("Service is not running")
-          : stateGlobal.svcStatus.value == SvcStatus.connecting
-              ? translate("connecting_status")
-              : stateGlobal.svcStatus.value == SvcStatus.notReady
-                  ? translate("not_ready_status")
-                  : translate('Ready'),
+      statusMessage,
       style: TextStyle(fontSize: em),
     );
   }
@@ -167,6 +175,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
     final status =
         jsonDecode(await bind.mainGetConnectStatus()) as Map<String, dynamic>;
     final statusNum = status['status_num'] as int;
+    _statusReason.value = status['status_reason'] as String? ?? 'offline';
     if (statusNum == 0) {
       stateGlobal.svcStatus.value = SvcStatus.connecting;
     } else if (statusNum == -1) {

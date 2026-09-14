@@ -78,6 +78,8 @@ pub fn device_capabilities() -> Vec<&'static str> {
             "telemetry.events",
             "files.browse",
             "files.read",
+            "service.control",
+            "process.terminate",
         ]
     }
 }
@@ -303,10 +305,11 @@ pub async fn sync_device_enrollment() {
     if device_id.is_empty() {
         return;
     }
+    let device_uuid = String::from_utf8_lossy(&hbb_common::get_uuid()).into_owned();
 
     let mut body = serde_json::json!({
         "device_id": device_id,
-        "uuid": crate::encode64(hbb_common::get_uuid()),
+        "uuid": device_uuid,
         "hostname": crate::hostname(),
         "platform": std::env::consts::OS,
         "version": crate::VERSION,

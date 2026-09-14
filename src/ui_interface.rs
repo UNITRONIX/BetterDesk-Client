@@ -37,6 +37,7 @@ pub type Children = Arc<Mutex<(bool, HashMap<(String, String), Child>)>>;
 #[derive(Clone, Debug, Serialize)]
 pub struct UiStatus {
     pub status_num: i32,
+    pub status_reason: String,
     #[cfg(not(feature = "flutter"))]
     pub key_confirmed: bool,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -57,6 +58,7 @@ pub struct LoginDeviceInfo {
 lazy_static::lazy_static! {
     static ref UI_STATUS : Arc<Mutex<UiStatus>> = Arc::new(Mutex::new(UiStatus{
         status_num: 0,
+        status_reason: "connecting".to_owned(),
         #[cfg(not(feature = "flutter"))]
         key_confirmed: false,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -70,6 +72,39 @@ lazy_static::lazy_static! {
     static ref ASYNC_HTTP_STATUS : Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
     static ref TEMPORARY_PASSWD : Arc<Mutex<String>> = Arc::new(Mutex::new("".to_owned()));
     static ref IS_REMOTE_MODIFY_ENABLED_BY_CONTROL_PERMISSIONS : Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+}
+
+fn online_status_reason_for(
+    status_num: i64,
+    key_confirmed: bool,
+    needs_deploy: bool,
+    has_rendezvous_server: bool,
+) -> &'static str {
+    if needs_deploy {
+        return "deployment_required";
+    }
+    if !has_rendezvous_server {
+        return "no_rendezvous_server";
+    }
+    if status_num > 0 && key_confirmed {
+        "ready"
+    } else if status_num == 0 {
+        "connecting"
+    } else {
+        "offline"
+    }
+}
+
+fn online_status_reason(status_num: i64, key_confirmed: bool) -> String {
+    use std::sync::atomic::Ordering;
+
+    online_status_reason_for(
+        status_num,
+        key_confirmed,
+        crate::rendezvous_mediator::NEEDS_DEPLOY.load(Ordering::SeqCst),
+        !Config::get_rendezvous_servers().is_empty(),
+    )
+    .to_owned()
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1423,15 +1458,19 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
                                 video_conn_count = n;
                             }
                             Ok(Some(ipc::Data::OnlineStatus(Some((mut x, _c))))) => {
-                                if x > 0 {
+                                if x > 0 && !_c {
+                                    x = -1;
+                                } else if x > 0 {
                                     x = 1
                                 }
+                                let status_reason = online_status_reason(x, _c);
                                 #[cfg(not(feature = "flutter"))]
                                 {
                                     key_confirmed = _c;
                                 }
                                 *UI_STATUS.lock().unwrap() = UiStatus {
                                     status_num: x as _,
+                                    status_reason,
                                     #[cfg(not(feature = "flutter"))]
                                     key_confirmed: _c,
                                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1484,6 +1523,7 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
         }
         *UI_STATUS.lock().unwrap() = UiStatus {
             status_num: -1,
+            status_reason: "ipc_disconnected".to_owned(),
             #[cfg(not(feature = "flutter"))]
             key_confirmed,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1772,7 +1812,24 @@ pub fn is_remote_modify_enabled_by_control_permissions() -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{trim_video_save_directory, validate_windows_service_video_save_directory};
+    use super::{
+        online_status_reason_for, trim_video_save_directory,
+        validate_windows_service_video_save_directory,
+    };
+
+    #[test]
+    fn status_reason_requires_confirmed_registration() {
+        assert_eq!(online_status_reason_for(1, false, false, true), "offline");
+        assert_eq!(online_status_reason_for(1, true, false, true), "ready");
+        assert_eq!(
+            online_status_reason_for(-1, false, true, true),
+            "deployment_required"
+        );
+        assert_eq!(
+            online_status_reason_for(0, false, false, false),
+            "no_rendezvous_server"
+        );
+    }
 
     #[test]
     fn trim_configured_video_save_directory() {
