@@ -1,19 +1,19 @@
-pkgname=rustdesk
+pkgname=betterdesk
 pkgver=1.5.0
 pkgrel=0
 epoch=
 pkgdesc=""
-arch=('x86_64')
-url=""
+arch=('x86_64' 'aarch64')
+url="https://github.com/UNITRONIX/BetterDesk-Client"
 license=('AGPL-3.0')
 groups=()
 depends=('gtk3' 'xdotool' 'libxcb' 'libxfixes' 'alsa-lib' 'libva' 'libappindicator-gtk3' 'gst-plugins-base' 'gst-plugin-pipewire')
 makedepends=()
 checkdepends=()
 optdepends=()
-provides=()
-conflicts=()
-replaces=()
+provides=('rustdesk')
+conflicts=('rustdesk')
+replaces=('rustdesk')
 backup=()
 options=()
 install=pacman_install
@@ -23,12 +23,17 @@ md5sums=() #generate with 'makepkg -g'
 
 package() {
   if [[ ${FLUTTER} ]]; then
-	  mkdir -p "${pkgdir}/usr/share/rustdesk" && cp -r ${HBB}/flutter/build/linux/x64/release/bundle/* -t "${pkgdir}/usr/share/rustdesk"
+	  bundle="${HBB}/flutter/build/linux/x64/release/bundle"
+	  [[ ${CARCH} == aarch64 ]] && bundle="${HBB}/flutter/build/linux/arm64/release/bundle"
+	  mkdir -p "${pkgdir}/usr/share/rustdesk" && cp -r "${bundle}"/* -t "${pkgdir}/usr/share/rustdesk"
+  else
+	  install -Dm 755 "${HBB}/target/release/rustdesk" "${pkgdir}/usr/share/rustdesk/betterdesk"
   fi
   mkdir -p "${pkgdir}/usr/bin"
-  pushd ${pkgdir} && ln -s /usr/share/rustdesk/rustdesk usr/bin/rustdesk && popd
+  pushd ${pkgdir} && ln -s /usr/share/rustdesk/betterdesk usr/bin/betterdesk && ln -s /usr/share/rustdesk/betterdesk usr/bin/rustdesk && popd
   install -Dm 644 $HBB/res/rustdesk.service -t "${pkgdir}/usr/share/rustdesk/files"
-  install -Dm 644 $HBB/res/rustdesk.desktop -t "${pkgdir}/usr/share/rustdesk/files"
+  install -Dm 644 $HBB/res/betterdesk.desktop -t "${pkgdir}/usr/share/rustdesk/files"
+  install -Dm 644 $HBB/res/betterdesk-link.desktop -t "${pkgdir}/usr/share/rustdesk/files"
   install -Dm 644 $HBB/res/rustdesk-link.desktop -t "${pkgdir}/usr/share/rustdesk/files"
   install -Dm 644 $HBB/res/128x128@2x.png "${pkgdir}/usr/share/icons/hicolor/256x256/apps/rustdesk.png"
   install -Dm 644 $HBB/res/scalable.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/rustdesk.svg"

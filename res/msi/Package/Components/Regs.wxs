@@ -31,7 +31,7 @@
 
 			<Component Id="Product.Registry.DefaultIcon" Guid="6DBF2690-0955-4C6A-940F-634DDA503F49">
 				<RegistryKey Root="HKCR" Key="$(var.RegKeyRoot)\DefaultIcon">
-					<RegistryValue Type="string" Value='"[INSTALLFOLDER_INNER]$(var.Product).exe",0' />
+					<RegistryValue Type="string" Value='"[INSTALLFOLDER_INNER]$(var.Executable)",0' />
 				</RegistryKey>
 			</Component>
 
@@ -39,21 +39,29 @@
 				<RegistryKey Root="HKCR" Key="$(var.RegKeyRoot)\shell" />
 				<RegistryKey Root="HKCR" Key="$(var.RegKeyRoot)\shell\open" />
 				<RegistryKey Root="HKCR" Key="$(var.RegKeyRoot)\shell\open\command">
-					<RegistryValue Type="string" Value='"[INSTALLFOLDER_INNER]$(var.Product).exe" --play "%1"' />
+					<RegistryValue Type="string" Value='"[INSTALLFOLDER_INNER]$(var.Executable)" --play "%1"' />
 				</RegistryKey>
 			</Component>
 
 			<Component Id="Product.Registry.URLProtocol" Guid="565BE3F8-23A7-4B9D-B0DE-6D51CC86FC0B">
-				<RegistryKey Root="HKCR" Key="$(var.ProductLower)">
+				<RegistryKey Root="HKCR" Key="$(var.UriScheme)">
+					<RegistryValue Type="string" Name="URL Protocol" Value="" />
+				</RegistryKey>
+				<RegistryKey Root="HKCR" Key="$(var.LegacyUriScheme)">
 					<RegistryValue Type="string" Name="URL Protocol" Value="" />
 				</RegistryKey>
 			</Component>
 
 			<Component Id="Product.Registry.Command" Guid="BC8D581C-5960-4843-93DC-E347CD43BD49">
-				<RegistryKey Root="HKCR" Key="$(var.ProductLower)\shell" />
-				<RegistryKey Root="HKCR" Key="$(var.ProductLower)\shell\open" />
-				<RegistryKey Root="HKCR" Key="$(var.ProductLower)\shell\open\command">
-					<RegistryValue Type="string" Value='"[INSTALLFOLDER_INNER]$(var.Product).exe" "%1"' />
+				<RegistryKey Root="HKCR" Key="$(var.UriScheme)\shell" />
+				<RegistryKey Root="HKCR" Key="$(var.UriScheme)\shell\open" />
+				<RegistryKey Root="HKCR" Key="$(var.UriScheme)\shell\open\command">
+					<RegistryValue Type="string" Value='"[INSTALLFOLDER_INNER]$(var.Executable)" "%1"' />
+				</RegistryKey>
+				<RegistryKey Root="HKCR" Key="$(var.LegacyUriScheme)\shell" />
+				<RegistryKey Root="HKCR" Key="$(var.LegacyUriScheme)\shell\open" />
+				<RegistryKey Root="HKCR" Key="$(var.LegacyUriScheme)\shell\open\command">
+					<RegistryValue Type="string" Value='"[INSTALLFOLDER_INNER]$(var.Executable)" "%1"' />
 				</RegistryKey>
 			</Component>
 

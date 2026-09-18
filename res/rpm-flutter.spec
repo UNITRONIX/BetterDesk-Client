@@ -1,10 +1,12 @@
-Name:       rustdesk
+Name:       betterdesk
 Version:    1.5.0
 Release:    0
-Summary:    RPM package
+Summary:    BetterDesk remote desktop client
 License:    GPL-3.0
-URL:        https://rustdesk.com
+URL:        https://github.com/UNITRONIX/BetterDesk-Client
 Vendor:     rustdesk <info@rustdesk.com>
+Provides:   rustdesk
+Obsoletes:  rustdesk
 Requires:   gtk3 libxcb libXfixes alsa-lib libva gstreamer1-plugins-base
 Recommends: libayatana-appindicator-gtk3 libxdo
 Provides:   libdesktop_drop_plugin.so()(64bit), libdesktop_multi_window_plugin.so()(64bit), libfile_selector_linux_plugin.so()(64bit), libflutter_custom_cursor_plugin.so()(64bit), libflutter_linux_gtk.so()(64bit), libscreen_retriever_plugin.so()(64bit), libtray_manager_plugin.so()(64bit), liburl_launcher_linux_plugin.so()(64bit), libwindow_manager_plugin.so()(64bit), libwindow_size_plugin.so()(64bit), libtexture_rgba_renderer_plugin.so()(64bit)
@@ -27,7 +29,8 @@ The best open-source remote desktop client software, written in Rust.
 mkdir -p "%{buildroot}/usr/share/rustdesk" && cp -r ${HBB}/flutter/build/linux/x64/release/bundle/* -t "%{buildroot}/usr/share/rustdesk"
 mkdir -p "%{buildroot}/usr/bin"
 install -Dm 644 $HBB/res/rustdesk.service -t "%{buildroot}/usr/share/rustdesk/files"
-install -Dm 644 $HBB/res/rustdesk.desktop -t "%{buildroot}/usr/share/rustdesk/files"
+install -Dm 644 $HBB/res/betterdesk.desktop -t "%{buildroot}/usr/share/rustdesk/files"
+install -Dm 644 $HBB/res/betterdesk-link.desktop -t "%{buildroot}/usr/share/rustdesk/files"
 install -Dm 644 $HBB/res/rustdesk-link.desktop -t "%{buildroot}/usr/share/rustdesk/files"
 install -Dm 644 $HBB/res/128x128@2x.png "%{buildroot}/usr/share/icons/hicolor/256x256/apps/rustdesk.png"
 install -Dm 644 $HBB/res/scalable.svg "%{buildroot}/usr/share/icons/hicolor/scalable/apps/rustdesk.svg"
@@ -37,7 +40,8 @@ install -Dm 644 $HBB/res/scalable.svg "%{buildroot}/usr/share/icons/hicolor/scal
 /usr/share/rustdesk/files/rustdesk.service
 /usr/share/icons/hicolor/256x256/apps/rustdesk.png
 /usr/share/icons/hicolor/scalable/apps/rustdesk.svg
-/usr/share/rustdesk/files/rustdesk.desktop
+/usr/share/rustdesk/files/betterdesk.desktop
+/usr/share/rustdesk/files/betterdesk-link.desktop
 /usr/share/rustdesk/files/rustdesk-link.desktop
 
 %changelog
@@ -57,9 +61,11 @@ esac
 
 %post
 cp /usr/share/rustdesk/files/rustdesk.service /etc/systemd/system/rustdesk.service
-cp /usr/share/rustdesk/files/rustdesk.desktop /usr/share/applications/
+cp /usr/share/rustdesk/files/betterdesk.desktop /usr/share/applications/
+cp /usr/share/rustdesk/files/betterdesk-link.desktop /usr/share/applications/
 cp /usr/share/rustdesk/files/rustdesk-link.desktop /usr/share/applications/
-ln -sf /usr/share/rustdesk/rustdesk /usr/bin/rustdesk
+ln -sf /usr/share/rustdesk/betterdesk /usr/bin/betterdesk
+ln -sf /usr/share/rustdesk/betterdesk /usr/bin/rustdesk
 systemctl daemon-reload
 systemctl enable rustdesk
 systemctl start rustdesk
@@ -82,10 +88,12 @@ esac
 case "$1" in
   0)
     # for uninstall
-    rm /usr/bin/rustdesk || true
+    rm /usr/bin/betterdesk /usr/bin/rustdesk || true
     rmdir /usr/lib/rustdesk || true
     rmdir /usr/local/rustdesk || true
     rmdir /usr/share/rustdesk || true
+    rm /usr/share/applications/betterdesk.desktop || true
+    rm /usr/share/applications/betterdesk-link.desktop || true
     rm /usr/share/applications/rustdesk.desktop || true
     rm /usr/share/applications/rustdesk-link.desktop || true
     update-desktop-database

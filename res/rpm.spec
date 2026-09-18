@@ -1,10 +1,12 @@
-Name:       rustdesk
+Name:       betterdesk
 Version:    1.5.0
 Release:    0
-Summary:    RPM package
+Summary:    BetterDesk remote desktop client
 License:    GPL-3.0
-URL:        https://rustdesk.com
+URL:        https://github.com/UNITRONIX/BetterDesk-Client
 Vendor:     rustdesk <info@rustdesk.com>
+Provides:   rustdesk
+Obsoletes:  rustdesk
 Requires:   gtk3 libxcb libXfixes alsa-lib libva2 gstreamer1-plugins-base
 Recommends: libayatana-appindicator-gtk3 libxdo
 
@@ -27,21 +29,25 @@ mkdir -p %{buildroot}/usr/share/rustdesk/
 mkdir -p %{buildroot}/usr/share/rustdesk/files/
 mkdir -p %{buildroot}/usr/share/icons/hicolor/256x256/apps/
 mkdir -p %{buildroot}/usr/share/icons/hicolor/scalable/apps/
-install -m 755 $HBB/target/release/rustdesk %{buildroot}/usr/bin/rustdesk
+install -m 755 $HBB/target/release/rustdesk %{buildroot}/usr/bin/betterdesk
+ln -s betterdesk %{buildroot}/usr/bin/rustdesk
 install $HBB/libsciter-gtk.so %{buildroot}/usr/share/rustdesk/libsciter-gtk.so
 install $HBB/res/rustdesk.service %{buildroot}/usr/share/rustdesk/files/
 install $HBB/res/128x128@2x.png %{buildroot}/usr/share/icons/hicolor/256x256/apps/rustdesk.png
 install $HBB/res/scalable.svg %{buildroot}/usr/share/icons/hicolor/scalable/apps/rustdesk.svg
-install $HBB/res/rustdesk.desktop %{buildroot}/usr/share/rustdesk/files/
+install $HBB/res/betterdesk.desktop %{buildroot}/usr/share/rustdesk/files/
+install $HBB/res/betterdesk-link.desktop %{buildroot}/usr/share/rustdesk/files/
 install $HBB/res/rustdesk-link.desktop %{buildroot}/usr/share/rustdesk/files/
 
 %files
+/usr/bin/betterdesk
 /usr/bin/rustdesk
 /usr/share/rustdesk/libsciter-gtk.so
 /usr/share/rustdesk/files/rustdesk.service
 /usr/share/icons/hicolor/256x256/apps/rustdesk.png
 /usr/share/icons/hicolor/scalable/apps/rustdesk.svg
-/usr/share/rustdesk/files/rustdesk.desktop
+/usr/share/rustdesk/files/betterdesk.desktop
+/usr/share/rustdesk/files/betterdesk-link.desktop
 /usr/share/rustdesk/files/rustdesk-link.desktop
 /usr/share/rustdesk/files/__pycache__/*
 
@@ -62,7 +68,8 @@ esac
 
 %post
 cp /usr/share/rustdesk/files/rustdesk.service /etc/systemd/system/rustdesk.service
-cp /usr/share/rustdesk/files/rustdesk.desktop /usr/share/applications/
+cp /usr/share/rustdesk/files/betterdesk.desktop /usr/share/applications/
+cp /usr/share/rustdesk/files/betterdesk-link.desktop /usr/share/applications/
 cp /usr/share/rustdesk/files/rustdesk-link.desktop /usr/share/applications/
 systemctl daemon-reload
 systemctl enable rustdesk
@@ -86,6 +93,8 @@ esac
 case "$1" in
   0)
     # for uninstall
+    rm /usr/share/applications/betterdesk.desktop || true
+    rm /usr/share/applications/betterdesk-link.desktop || true
     rm /usr/share/applications/rustdesk.desktop || true
     rm /usr/share/applications/rustdesk-link.desktop || true
     update-desktop-database

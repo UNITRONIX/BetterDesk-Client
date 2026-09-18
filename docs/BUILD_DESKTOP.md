@@ -50,6 +50,12 @@ chmod +x scripts/check_desktop_env_linux.sh
 
 Check scripts only **verify**; they do not install tools. On this machine the reference layout is:
 
+The installer/launcher contract can be checked without a desktop toolchain:
+
+```sh
+python3 scripts/validate_desktop_packaging.py
+```
+
 | Tool | Path |
 |------|------|
 | Flutter 3.24.5 | `C:\tools\flutter-3.24.5` |

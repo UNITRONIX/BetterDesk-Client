@@ -1,11 +1,11 @@
 {
-  "id": "com.rustdesk.RustDesk",
+  "id": "com.unitronix.betterdesk",
   "runtime": "org.freedesktop.Platform",
   "runtime-version": "24.08",
   "sdk": "org.freedesktop.Sdk",
-  "command": "rustdesk",
+  "command": "betterdesk",
   "cleanup": ["/include", "/lib/pkgconfig", "/share/gtk-doc"],
-  "rename-desktop-file": "rustdesk.desktop",
+  "rename-desktop-file": "betterdesk.desktop",
   "rename-icon": "rustdesk",
   "modules": [
     "shared-modules/libappindicator/libappindicator-gtk3-12.10.json",
@@ -22,17 +22,18 @@
       ]
     },
     {
-      "name": "rustdesk",
+      "name": "betterdesk",
       "buildsystem": "simple",
       "build-commands": [
-        "bsdtar -Oxf rustdesk.deb data.tar.xz | bsdtar -xf -",
+        "bsdtar -Oxf betterdesk.deb data.tar.xz | bsdtar -xf -",
         "cp -r usr/* /app/",
-        "mkdir -p /app/bin && ln -s /app/share/rustdesk/rustdesk /app/bin/rustdesk"
+        "mkdir -p /app/bin /app/share/metainfo && ln -s /app/share/rustdesk/betterdesk /app/bin/betterdesk && ln -s /app/share/rustdesk/betterdesk /app/bin/rustdesk",
+        "install -Dm644 com.rustdesk.RustDesk.metainfo.xml /app/share/metainfo/com.unitronix.betterdesk.metainfo.xml"
       ],
       "sources": [
         {
           "type": "file",
-          "path": "rustdesk.deb"
+          "path": "betterdesk.deb"
         },
         {
           "type": "file",

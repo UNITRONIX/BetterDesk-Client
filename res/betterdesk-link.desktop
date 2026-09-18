@@ -1,7 +1,7 @@
 [Desktop Entry]
-Name=RustDesk
+Name=BetterDesk Client
 NoDisplay=true
-MimeType=x-scheme-handler/rustdesk;
+MimeType=x-scheme-handler/betterdesk;
 TryExec=betterdesk
 Exec=betterdesk %u
 Icon=rustdesk

@@ -144,7 +144,7 @@ jobs:
       - name: Download macOS unsigned
         uses: actions/download-artifact@v4
         with:
-          pattern: rustdesk-unsigned-macos-*
+          pattern: betterdesk-unsigned-macos-*
           path: dist-raw
           merge-multiple: false
         continue-on-error: true
@@ -152,7 +152,7 @@ jobs:
       - name: Download Linux debs
         uses: actions/download-artifact@v4
         with:
-          pattern: "rustdesk-${{ env.VERSION }}-*.deb"
+          pattern: "betterdesk-${{ env.VERSION }}-*.deb"
           path: dist-raw/linux-debs
           merge-multiple: true
         continue-on-error: true
@@ -160,7 +160,7 @@ jobs:
       - name: Download Linux rpms
         uses: actions/download-artifact@v4
         with:
-          pattern: "rustdesk-${{ env.VERSION }}-*-rpms"
+          pattern: "betterdesk-${{ env.VERSION }}-*-rpms"
           path: dist-raw/linux-rpms
           merge-multiple: true
         continue-on-error: true
@@ -210,7 +210,7 @@ jobs:
           fi
 
           for arch in x86_64 aarch64; do
-            src=$(find dist-raw -maxdepth 2 -type d -name "rustdesk-unsigned-macos-${arch}" | head -n1 || true)
+            src=$(find dist-raw -maxdepth 2 -type d -name "betterdesk-unsigned-macos-${arch}" | head -n1 || true)
             if [ -n "${src}" ]; then
               cp -a "${src}/." "dist/macos-${arch}/"
               find "dist/macos-${arch}" -name custom.txt -delete || true

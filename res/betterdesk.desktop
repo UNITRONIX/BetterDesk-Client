@@ -1,0 +1,19 @@
+[Desktop Entry]
+Name=BetterDesk Client
+GenericName=Remote Desktop
+Comment=BetterDesk Remote Desktop
+Exec=betterdesk %u
+Icon=rustdesk
+Terminal=false
+Type=Application
+StartupNotify=true
+Categories=Network;RemoteAccess;GTK;
+Keywords=internet;linux;dart;rust;remote-control;p2p;betterdesk;remote-desktop;
+Actions=new-window;
+StartupWMClass=betterdesk
+
+X-Desktop-File-Install-Version=0.23
+
+[Desktop Action new-window]
+Name=Open a New Window
+Exec=betterdesk %u

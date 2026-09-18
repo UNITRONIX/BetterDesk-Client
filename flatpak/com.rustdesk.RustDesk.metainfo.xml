@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>com.rustdesk.RustDesk</id>
-  <developer id="com.rustdesk">
-    <name>RustDesk</name>
+  <id>com.unitronix.betterdesk</id>
+  <developer id="com.unitronix">
+    <name>BetterDesk</name>
   </developer>
-  <launchable type="desktop-id">com.rustdesk.RustDesk.desktop</launchable>
+  <launchable type="desktop-id">betterdesk.desktop</launchable>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>AGPL-3.0-only</project_license>
-  <name>RustDesk</name>
+  <name>BetterDesk Client</name>
   <summary>Secure remote desktop access</summary>
   <description>
     <p>
-        RustDesk is a full-featured open source remote control alternative for self-hosting and security with minimal configuration.
+        BetterDesk Client is a full-featured open source remote control alternative for self-hosting and security with minimal configuration.
     </p>
     <ul>
       <li> Works on Windows, macOS, Linux, iOS, Android, Web. </li>
