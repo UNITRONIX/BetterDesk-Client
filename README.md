@@ -26,6 +26,8 @@
 
 This repository is the **official BetterDesk desktop client** ([UNITRONIX/BetterDesk-Client](https://github.com/UNITRONIX/BetterDesk-Client)). Active work targets **Flutter desktop on Windows and Linux**. Mobile and web trees remain in-repo but are not the current focus.
 
+> **AI-assisted development:** BetterDesk Client is created and maintained with the assistance of artificial intelligence tools.
+
 The client **does not** connect to public `*.rustdesk.com` infrastructure. Configure your own ID / Relay / API / Key (Settings → Network), import a deploy string from the BetterDesk panel, or use a Generator bake-in (`custom.txt`). Without a configured server, the client does not register on a public cloud.
 
 Pair it with the self-hosted BetterDesk server and web console: [UNITRONIX/BetterDesk](https://github.com/UNITRONIX/BetterDesk).
