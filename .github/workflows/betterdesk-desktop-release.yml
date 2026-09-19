@@ -266,7 +266,8 @@ jobs:
             exit 1
           fi
 
-          ls -laR dist | head -n 200
+          ls -laR dist > dist-layout.txt
+          head -n 200 dist-layout.txt
 
       - name: Pack generator templates (clean binaries only)
         shell: bash
