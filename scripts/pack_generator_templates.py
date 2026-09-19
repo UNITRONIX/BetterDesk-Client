@@ -75,7 +75,7 @@ def _validate_source(src: Path, platform: str) -> str:
             macos = app / "Contents" / "MacOS"
             if not macos.is_dir():
                 continue
-            binary = _relative_file(macos, ("betterdesk", "rustdesk"))
+            binary = _relative_file(macos, ("BetterDesk Client", "betterdesk", "rustdesk"))
             if binary:
                 return (macos / binary).relative_to(src).as_posix()
         raise ValueError(f"{src}: missing valid macOS .app bundle and desktop binary")
