@@ -125,13 +125,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate release metadata
+        run: python3 scripts/validate_release_metadata.py --version "${VERSION}"
+
       - name: Download Windows unsigned
         uses: actions/download-artifact@v4
         with:
           pattern: rustdesk-unsigned-windows-*
           path: dist-raw
           merge-multiple: false
-        continue-on-error: true
 
       - name: Download MSI templates
         uses: actions/download-artifact@v4
@@ -139,7 +141,6 @@ jobs:
           pattern: rustdesk-unsigned-msi-template-*
           path: dist-raw/msi-template-arts
           merge-multiple: true
-        continue-on-error: true
 
       - name: Download macOS unsigned
         uses: actions/download-artifact@v4
@@ -147,7 +148,6 @@ jobs:
           pattern: betterdesk-unsigned-macos-*
           path: dist-raw
           merge-multiple: false
-        continue-on-error: true
 
       - name: Download Linux debs
         uses: actions/download-artifact@v4
@@ -155,7 +155,6 @@ jobs:
           pattern: "betterdesk-${{ env.VERSION }}-*.deb"
           path: dist-raw/linux-debs
           merge-multiple: true
-        continue-on-error: true
 
       - name: Download Linux rpms
         uses: actions/download-artifact@v4
@@ -163,7 +162,6 @@ jobs:
           pattern: "betterdesk-${{ env.VERSION }}-*-rpms"
           path: dist-raw/linux-rpms
           merge-multiple: true
-        continue-on-error: true
 
       - name: Download Windows installers
         uses: actions/download-artifact@v4
@@ -171,7 +169,6 @@ jobs:
           pattern: betterdesk-windows-installers-*
           path: dist-raw/windows-installers
           merge-multiple: true
-        continue-on-error: true
 
       - name: Normalize BetterDesk layout (full client only)
         shell: bash
@@ -213,6 +210,10 @@ jobs:
             src=$(find dist-raw -maxdepth 2 -type d -name "betterdesk-unsigned-macos-${arch}" | head -n1 || true)
             if [ -n "${src}" ]; then
               cp -a "${src}/." "dist/macos-${arch}/"
+              app_archive=$(find "dist/macos-${arch}" -maxdepth 1 -name '*-app.tar.gz' | head -n1 || true)
+              if [ -n "${app_archive}" ]; then
+                tar -xzf "${app_archive}" -C "dist/macos-${arch}"
+              fi
               find "dist/macos-${arch}" -name custom.txt -delete || true
               # Prefer a named DMG in clean/ when present
               dmg=$(find "dist/macos-${arch}" -maxdepth 1 -name '*.dmg' | head -n1 || true)
@@ -270,6 +271,7 @@ jobs:
       - name: Pack generator templates (clean binaries only)
         shell: bash
         run: |
+          python3 scripts/test_generator_contract.py
           # Templates are clean trees for the console Generator — not a Support build.
           # Support Agent custom.txt is applied by the panel, never in this workflow.
           python3 scripts/pack_generator_templates.py \
@@ -277,8 +279,10 @@ jobs:
             --out dist/generator-templates \
             --version "${VERSION}" \
             --archive
-          cp dist/generator-templates-*.tar.gz dist/clean/ || true
-          cp dist/generator-templates/manifest.json dist/clean/betterdesk-${VERSION}-generator-manifest.json || true
+          python3 scripts/validate_generator_templates.py --root dist/generator-templates
+          cp dist/generator-templates-*.tar.gz dist/clean/
+          cp dist/generator-templates-*.tar.gz.sha256 dist/clean/
+          cp dist/generator-templates/manifest.json dist/clean/betterdesk-${VERSION}-generator-manifest.json
 
       - name: Write clean desktop manifest
         shell: bash
@@ -376,5 +380,6 @@ jobs:
             dist/clean/*
             dist/msi-template/*
             dist/generator-templates-*.tar.gz
+            dist/generator-templates-*.tar.gz.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

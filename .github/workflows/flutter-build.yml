@@ -608,10 +608,19 @@ jobs:
 
       - name: Upload unsigned macOS app
         if: env.UPLOAD_ARTIFACT == 'true'
+        run: |
+          tar -C "./flutter/build/macos/Build/Products/Release" \
+            -czf "betterdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-app.tar.gz" \
+            "BetterDesk Client.app"
+
+      - name: Upload unsigned macOS app artifacts
+        if: env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: betterdesk-unsigned-macos-${{ matrix.job.arch }}
-          path: betterdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg # can not upload the directory directly or tar.gz, which destroy the link structure, causing the codesign failed
+          path: |
+            betterdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg
+            betterdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-app.tar.gz
 
       - name: Codesign app and create signed dmg
         if: env.MACOS_P12_BASE64 != null && env.UPLOAD_ARTIFACT == 'true'

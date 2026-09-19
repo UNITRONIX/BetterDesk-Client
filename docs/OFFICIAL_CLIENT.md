@@ -171,13 +171,18 @@ Zakres platform: **Windows / Linux / macOS** (x86_64 + aarch64). Brak jobów And
 | `betterdesk-template-*.msi` | MSI template (cab2) |
 
 Pack lokalnie: `python scripts/pack_generator_templates.py --dist-root ./dist --out ./generator-templates --version … --archive`.
+Walidacja: `python scripts/validate_generator_templates.py --root ./generator-templates`.
+Manifest generatora wymaga kompletu Windows/Linux/macOS x86_64+aarch64, binariów bez `custom.txt`, markerów injectowania i hashy archiwów. Paczka zawiera także plik `.sha256` dla archiwum generatora.
 
 ### Baseline bezpieczeństwa floty
 
 - Produkcja: **signed** `custom.txt` (Phase B), nie plain JSON; seed tylko na konsoli (`BETTERDESK_CUSTOM_CLIENT_SIGNING_SEED`).
+- Release klienta odrzuca unsigned plain JSON; plain JSON pozostaje dostępny wyłącznie dla buildów debug.
 - Serwery w `override-settings` + `hide-server-settings` / `disable-settings`.
 - Preferuj HTTPS dla `api-server` gdy panel to umożliwia; `/api/branding` jest publicznym GET (kosmetyka — zaufanie = Twój API).
 - Technik używa pełnego klienta (bez `conn-type: incoming`).
+- Support bundle może opcjonalnie dołączyć skrypty instalacji usługi/autostartu dla Windows, Linux i macOS. Opcje są wyłączone domyślnie.
+- Branding firmy, kolorów i logo jest pobierany runtime przez `GET /api/branding`; obraz logo nie jest osadzany w `custom.txt` ani w paczce generatora.
 
 ### vs legacy CDAP Support Agent
 

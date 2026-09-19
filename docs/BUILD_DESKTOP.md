@@ -207,3 +207,22 @@ Official BetterDesk identity, public-server kill, Client Generator bake-in (`cus
 Example configs: [`examples/betterdesk-custom.example.json`](../examples/betterdesk-custom.example.json), [`examples/betterdesk-support-agent.example.json`](../examples/betterdesk-support-agent.example.json).
 
 Release workflow (clean desktop agents + installers + generator templates): [`.github/workflows/betterdesk-desktop-release.yml`](../.github/workflows/betterdesk-desktop-release.yml). Desktop-only reusable build: [`.github/workflows/flutter-build.yml`](../.github/workflows/flutter-build.yml).
+
+## Generator template validation
+
+The release workflow publishes clean templates only. The Support Agent is created later
+by the BetterDesk console with a signed `custom.txt`; release builds reject unsigned
+custom configuration. To build and validate a local template package:
+
+```sh
+python scripts/pack_generator_templates.py \
+  --dist-root ./dist \
+  --out ./generator-templates \
+  --version 1.5.0 \
+  --archive
+python scripts/validate_generator_templates.py --root ./generator-templates
+```
+
+The package must contain Windows, Linux and macOS x86_64/aarch64 templates, a valid
+binary and a safe `.custom-txt-here` injection marker for each target. The console
+verifies the release archive checksum before installing it.

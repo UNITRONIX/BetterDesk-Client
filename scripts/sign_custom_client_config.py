@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
+import json
 import sys
 from pathlib import Path
 
@@ -42,9 +44,28 @@ def main() -> int:
         )
         return 1
 
-    seed = base64.b64decode(args.seed.read_text(encoding="utf-8").strip())
+    try:
+        seed = base64.b64decode(args.seed.read_text(encoding="utf-8").strip(), validate=True)
+    except (ValueError, binascii.Error) as exc:
+        print(f"Invalid base64 signing seed: {exc}", file=sys.stderr)
+        return 1
+    if len(seed) != 32:
+        print("Signing seed must decode to exactly 32 bytes", file=sys.stderr)
+        return 1
+
+    try:
+        payload = json.loads(args.json_file.read_text(encoding="utf-8"))
+        raw = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Invalid custom client JSON: {exc}", file=sys.stderr)
+        return 1
+
     sk = SigningKey(seed)
-    raw = args.json_file.read_bytes()
     # sodiumoxide sign::verify expects signature || message
     signed_msg = sk.sign(raw)
     out = base64.b64encode(signed_msg.signature + signed_msg.message).decode("ascii")

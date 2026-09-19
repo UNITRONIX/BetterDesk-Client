@@ -2453,9 +2453,11 @@ pub fn read_custom_client(config: &str) {
     if config.is_empty() {
         return;
     }
-    // Generator Phase A / lab: plain JSON custom.txt (no signature).
     if config.starts_with('{') {
+        #[cfg(debug_assertions)]
         apply_custom_client_map(config.as_bytes());
+        #[cfg(not(debug_assertions))]
+        log::error!("Unsigned custom client config is disabled in release builds");
         return;
     }
     let Ok(data) = decode64(config) else {

@@ -38,6 +38,8 @@ PLATFORMS = (
     ("macos", "x86_64", "macos-x86_64"),
     ("macos", "aarch64", "macos-aarch64"),
 )
+PLATFORM_KEYS = tuple(f"{platform}-{arch}" for platform, arch, _ in PLATFORMS)
+MIN_BINARY_SIZE = 100 * 1024
 
 
 def sha256_file(path: Path) -> str:
@@ -59,7 +61,92 @@ def ensure_no_custom_txt(root: Path) -> None:
         p.unlink()
 
 
+def _relative_file(root: Path, names: tuple[str, ...]) -> str:
+    for name in names:
+        for match in sorted(root.rglob(name)):
+            if match.is_file() and match.stat().st_size >= MIN_BINARY_SIZE:
+                return match.relative_to(root).as_posix()
+    return ""
+
+
+def _validate_source(src: Path, platform: str) -> str:
+    if platform == "macos":
+        for app in sorted(src.rglob("*.app")):
+            macos = app / "Contents" / "MacOS"
+            if not macos.is_dir():
+                continue
+            binary = _relative_file(macos, ("betterdesk", "rustdesk"))
+            if binary:
+                return (macos / binary).relative_to(src).as_posix()
+        raise ValueError(f"{src}: missing valid macOS .app bundle and desktop binary")
+
+    binary = _relative_file(src, ("betterdesk.exe", "rustdesk.exe", "betterdesk", "rustdesk"))
+    if not binary:
+        raise ValueError(f"{src}: missing BetterDesk desktop binary")
+    return binary
+
+
+def _safe_archive_path(path: str) -> bool:
+    candidate = Path(path)
+    return not candidate.is_absolute() and ".." not in candidate.parts
+
+
+def validate_manifest(root: Path, manifest: dict, require_all: bool = True) -> None:
+    if manifest.get("schema_version") != 2:
+        raise ValueError("manifest schema_version must be 2")
+    if manifest.get("sku") != "generator-templates":
+        raise ValueError("manifest sku must be generator-templates")
+    templates = manifest.get("templates")
+    if not isinstance(templates, list):
+        raise ValueError("manifest templates must be a list")
+
+    seen = set()
+    for entry in templates:
+        key = f"{entry.get('platform')}-{entry.get('arch')}"
+        if entry.get("format") != "portable":
+            continue
+        if key in seen:
+            raise ValueError(f"duplicate template: {key}")
+        seen.add(key)
+        template_path = entry.get("template_path")
+        if not isinstance(template_path, str) or not _safe_archive_path(template_path):
+            raise ValueError(f"invalid template path: {template_path!r}")
+        template_root = root / template_path
+        if not template_root.is_dir():
+            raise ValueError(f"missing template directory: {template_path}")
+        if any(path.is_symlink() for path in template_root.rglob("*")):
+            raise ValueError(f"template contains symlink: {template_path}")
+        if list(template_root.rglob("custom.txt")):
+            raise ValueError(f"template contains custom.txt: {template_path}")
+        if not list(template_root.rglob(".custom-txt-here")):
+            raise ValueError(f"missing custom.txt marker: {template_path}")
+        binary_path = entry.get("binary_path")
+        if not isinstance(binary_path, str) or not _safe_archive_path(binary_path):
+            raise ValueError(f"invalid binary path for {key}")
+        binary = template_root / binary_path
+        if not binary.is_file() or binary.stat().st_size < MIN_BINARY_SIZE:
+            raise ValueError(f"missing or undersized binary for {key}")
+        if not isinstance(entry.get("sha256"), str) or len(entry["sha256"]) != 64:
+            raise ValueError(f"invalid template sha256 for {key}")
+        archive = entry.get("archive")
+        if not isinstance(archive, str) or not _safe_archive_path(archive):
+            raise ValueError(f"invalid template archive for {key}")
+        archive_path = root / archive
+        if not archive_path.is_file() or sha256_file(archive_path) != entry["sha256"]:
+            raise ValueError(f"template archive hash mismatch for {key}")
+
+    required = set(PLATFORM_KEYS)
+    declared = set(manifest.get("required_platforms", []))
+    if declared != required:
+        raise ValueError("manifest required_platforms does not match supported platforms")
+    if require_all and seen != required:
+        missing = ", ".join(sorted(required - seen))
+        extra = ", ".join(sorted(seen - required))
+        raise ValueError(f"portable platform set incomplete; missing={missing} extra={extra}")
+
+
 def pack_one(src: Path, out_dir: Path, platform: str, arch: str) -> dict:
+    binary_path = _validate_source(src, platform)
     out_dir.mkdir(parents=True, exist_ok=True)
     copy_tree(src, out_dir)
     ensure_no_custom_txt(out_dir)
@@ -88,7 +175,10 @@ def pack_one(src: Path, out_dir: Path, platform: str, arch: str) -> dict:
         "platform": platform,
         "arch": arch,
         "format": "portable",
-        "path": archive_name,
+        "path": f"{platform}-{arch}",
+        "template_path": f"{platform}-{arch}",
+        "archive": archive_name,
+        "binary_path": binary_path,
         "inject_custom_txt": inject,
         "sha256": sha256_file(archive_path),
         "size": archive_path.stat().st_size,
@@ -101,6 +191,11 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True, help="Output directory for templates")
     parser.add_argument("--version", default=os.environ.get("VERSION", "0.0.0"))
     parser.add_argument("--archive", action="store_true", help="Also write generator-templates-<version>.tar.gz")
+    parser.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help="Allow a partial platform set (for local development only)",
+    )
     args = parser.parse_args()
 
     out = args.out
@@ -137,19 +232,23 @@ def main() -> int:
             )
 
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "product": "betterdesk-desktop",
         "sku": "generator-templates",
         "version": args.version,
+        "required_platforms": list(PLATFORM_KEYS),
         "templates": entries,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    validate_manifest(out, manifest, require_all=not args.allow_missing)
     print(f"wrote {out / 'manifest.json'} ({len(entries)} templates)")
 
     if args.archive:
         archive = out.parent / f"generator-templates-{args.version}.tar.gz"
         with tarfile.open(archive, "w:gz") as tar:
             tar.add(out, arcname="generator-templates")
+        checksum = archive.with_name(archive.name + ".sha256")
+        checksum.write_text(f"{sha256_file(archive)}  {archive.name}\n", encoding="utf-8")
         print(f"wrote {archive}")
     return 0
 

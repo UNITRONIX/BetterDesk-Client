@@ -66,22 +66,27 @@ pub fn conn_mode() -> &'static str {
 }
 
 pub fn device_capabilities() -> Vec<&'static str> {
-    if config::is_incoming_only() {
-        vec!["remote_desktop", "telemetry.metrics"]
-    } else {
-        vec![
-            "remote_desktop",
-            "telemetry.metrics",
-            "inventory.hardware",
-            "telemetry.services",
-            "telemetry.processes",
-            "telemetry.events",
-            "files.browse",
-            "files.read",
-            "service.control",
-            "process.terminate",
-        ]
-    }
+    let capabilities = vec![
+        "remote_desktop",
+        "telemetry.metrics",
+        "inventory.hardware",
+        "telemetry.services",
+        "telemetry.processes",
+        "telemetry.events",
+        "files.browse",
+        "files.read",
+        "file_transfer",
+        "chat",
+        "clipboard",
+        "audio",
+        "terminal",
+        "service.control",
+        "process.terminate",
+        "restart",
+    ];
+    // Incoming-only restricts the connection direction, not the features
+    // available after an approved operator session.
+    capabilities
 }
 
 /// Fields for register / sysinfo / heartbeat so the panel can show device details.
@@ -158,8 +163,16 @@ pub async fn fetch_branding() -> ResultType<Value> {
     }
     let url = format!("{base}/api/branding");
     let client = create_http_client_async_with_url(&url).await;
-    let resp = client.get(&url).send().await?;
+    let revision = LocalConfig::get_option(OPTION_BRANDING_REVISION);
+    let mut request = client.get(&url);
+    if !revision.is_empty() && revision != "0" {
+        request = request.header(reqwest::header::IF_NONE_MATCH, format!("\"{revision}\""));
+    }
+    let resp = request.send().await?;
     let status = resp.status();
+    if status == reqwest::StatusCode::NOT_MODIFIED {
+        return Ok(serde_json::json!({ "revision": revision }));
+    }
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
         bail!("branding fetch failed: HTTP {status}");
