@@ -39,7 +39,7 @@ PLATFORMS = (
     ("macos", "aarch64", "macos-aarch64"),
 )
 PLATFORM_KEYS = tuple(f"{platform}-{arch}" for platform, arch, _ in PLATFORMS)
-MIN_BINARY_SIZE = 100 * 1024
+MIN_BINARY_SIZE = 32 * 1024
 
 
 def sha256_file(path: Path) -> str:
