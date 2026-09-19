@@ -22,7 +22,8 @@ Requires `pynacl`. After generation, rebuild the client so `include_str!` picks 
 
 ## `custom.txt` formats
 
-1. **Plain JSON** (Generator Phase A / lab) — file starts with `{`:
+1. **Plain JSON** — accepted only by debug builds for local development. Release
+   clients reject unsigned `custom.txt`:
 
 ```json
 {
@@ -36,7 +37,7 @@ Requires `pynacl`. After generation, rebuild the client so `include_str!` picks 
 }
 ```
 
-2. **Signed blob** (Generator Phase B+) — base64(NaCl-sign(JSON)), verified with `.pub`.
+2. **Signed blob** (production) — base64(NaCl-sign(JSON)), verified with `.pub`.
 
 Server options belong under `default-settings` (user can change) or `override-settings` (locked for fleet builds).
 
@@ -61,3 +62,9 @@ Runtime branding: `GET /api/branding` (both SKUs). Enrollment: `POST /api/device
 ```bash
 python scripts/pack_generator_templates.py --dist-root ./dist --out ./generator-templates --version 1.5.0 --archive
 ```
+
+The BetterDesk console installs the archive from a Client release or accepts a
+local upload. It verifies the archive checksum, manifest schema, platform
+completeness, binary paths and injection markers before replacing an existing
+module. Production builds require `BETTERDESK_CUSTOM_CLIENT_SIGNING_SEED` or
+`data/custom-client-signing.seed`; the seed is never part of the Client release.
