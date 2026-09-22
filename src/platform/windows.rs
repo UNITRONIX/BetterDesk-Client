@@ -1578,11 +1578,27 @@ fn get_after_install(
     reg add HKEY_CLASSES_ROOT\\{ext}\\shell\\open /f
     reg add HKEY_CLASSES_ROOT\\{ext}\\shell\\open\\command /f
     reg add HKEY_CLASSES_ROOT\\{ext}\\shell\\open\\command /f /ve /t REG_SZ /d \"\\\"{nested_exe}\\\" \\\"%%1\\\"\"
+    reg add HKEY_CLASSES_ROOT\\{uri_scheme} /f
+    reg add HKEY_CLASSES_ROOT\\{uri_scheme} /f /v \"URL Protocol\" /t REG_SZ /d \"\"
+    reg add HKEY_CLASSES_ROOT\\{uri_scheme}\\shell /f
+    reg add HKEY_CLASSES_ROOT\\{uri_scheme}\\shell\\open /f
+    reg add HKEY_CLASSES_ROOT\\{uri_scheme}\\shell\\open\\command /f
+    reg add HKEY_CLASSES_ROOT\\{uri_scheme}\\shell\\open\\command /f /ve /t REG_SZ /d \"\\\"{nested_exe}\\\" \\\"%%1\\\"\"
+    reg add HKEY_CLASSES_ROOT\\{legacy_uri_scheme} /f
+    reg add HKEY_CLASSES_ROOT\\{legacy_uri_scheme} /f /v \"URL Protocol\" /t REG_SZ /d \"\"
+    reg add HKEY_CLASSES_ROOT\\{legacy_uri_scheme}\\shell /f
+    reg add HKEY_CLASSES_ROOT\\{legacy_uri_scheme}\\shell\\open /f
+    reg add HKEY_CLASSES_ROOT\\{legacy_uri_scheme}\\shell\\open\\command /f
+    reg add HKEY_CLASSES_ROOT\\{legacy_uri_scheme}\\shell\\open\\command /f /ve /t REG_SZ /d \"\\\"{nested_exe}\\\" \\\"%%1\\\"\"
     netsh advfirewall firewall add rule name=\"{app_name} Service\" dir=out action=allow program=\"{exe}\" enable=yes
     netsh advfirewall firewall add rule name=\"{app_name} Service\" dir=in action=allow program=\"{exe}\" enable=yes
     {create_service}
     reg add HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System /f /v SoftwareSASGeneration /t REG_DWORD /d 1
-    ", create_service=get_create_service(&exe))
+    ",
+        create_service = get_create_service(&exe),
+        uri_scheme = hbb_common::config::URI_SCHEME,
+        legacy_uri_scheme = hbb_common::config::LEGACY_URI_SCHEME,
+    )
 }
 
 pub fn install_me(options: &str, path: String, silent: bool, debug: bool) -> ResultType<()> {
@@ -1805,10 +1821,65 @@ fn get_before_uninstall(kill_self: bool) -> String {
     taskkill /F /IM {app_name}.exe{filter}
     reg delete HKEY_CLASSES_ROOT\\.{ext} /f
     reg delete HKEY_CLASSES_ROOT\\{ext} /f
+    reg delete HKEY_CLASSES_ROOT\\{uri_scheme} /f
+    reg delete HKEY_CLASSES_ROOT\\{legacy_uri_scheme} /f
     netsh advfirewall firewall delete rule name=\"{app_name} Service\"
     ",
         broker_exe = WIN_TOPMOST_INJECTED_PROCESS_EXE,
+        uri_scheme = hbb_common::config::URI_SCHEME,
+        legacy_uri_scheme = hbb_common::config::LEGACY_URI_SCHEME,
     )
+}
+
+/// Register `betterdesk://` and legacy `rustdesk://` for the current user.
+/// HKCU overrides HKCR, so a portable or already-installed client can open
+/// browser links without a new elevated install.
+pub fn ensure_user_uri_schemes() {
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(err) => {
+            log::warn!("Skip URI scheme registration, current exe: {}", err);
+            return;
+        }
+    };
+    let Some(exe) = exe.to_str() else {
+        log::warn!("Skip URI scheme registration, exe path is not valid Unicode");
+        return;
+    };
+    let command = format!("\"{}\" \"%1\"", exe);
+    let hcu = RegKey::predef(HKEY_CURRENT_USER);
+    for scheme in [
+        hbb_common::config::URI_SCHEME,
+        hbb_common::config::LEGACY_URI_SCHEME,
+    ] {
+        register_user_uri_scheme(&hcu, scheme, &command);
+    }
+}
+
+fn register_user_uri_scheme(hcu: &RegKey, scheme: &str, command: &str) {
+    let classes = format!("Software\\Classes\\{}", scheme);
+    match hcu.create_subkey(&classes) {
+        Ok((key, _)) => {
+            if let Err(err) = key.set_value("URL Protocol", &"") {
+                log::warn!("Failed to set URL Protocol for {}: {}", scheme, err);
+            }
+        }
+        Err(err) => {
+            log::warn!("Failed to create URI scheme key {}: {}", scheme, err);
+            return;
+        }
+    }
+    let command_key = format!("Software\\Classes\\{}\\shell\\open\\command", scheme);
+    match hcu.create_subkey(&command_key) {
+        Ok((key, _)) => {
+            if let Err(err) = key.set_value("", &command) {
+                log::warn!("Failed to set URI open command for {}: {}", scheme, err);
+            }
+        }
+        Err(err) => {
+            log::warn!("Failed to create URI open command for {}: {}", scheme, err);
+        }
+    }
 }
 
 /// Constructs the uninstall command string for the application.

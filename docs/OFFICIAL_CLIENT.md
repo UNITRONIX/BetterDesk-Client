@@ -72,7 +72,7 @@ Po poprawnej konfiguracji Network (`api-server`) oficjalny klient **automatyczni
 | UI | Settings → Branding w trybie managed (read-only) gdy `branding-source=server` |
 | Stock RustDesk | **nie** woła `/api/branding`; dostaje tylko bezpieczny podzbiór przez heartbeat `strategy.config_options` (np. `display-name`) |
 
-Źródło prawdy edytuje panel: **Main → Client Branding** (nie Settings → Branding konsoli). Kontrakt: `schema_version`, `revision`, pola firmy/kontaktu/logo, `profiles.betterdesk` / `profiles.rustdesk`.
+Źródło prawdy edytuje panel: **Main → Client Branding** (nie Settings → Branding konsoli). Kontrakt: `schema_version`, `revision`, pola firmy/kontaktu/logo, `accent_color` i `background_color` (`#RRGGBB` lub `#AARRGGBB`), `profiles.betterdesk` / `profiles.rustdesk`.
 
 ## Attribution / licencja (AGPL-3.0)
 

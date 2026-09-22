@@ -170,7 +170,7 @@ pub fn core_main() -> Option<Vec<String>> {
 
     // linux uni (url) go here.
     #[cfg(all(target_os = "linux", feature = "flutter"))]
-    if args.len() > 0 && args[0].starts_with(&crate::get_uri_prefix()) {
+    if args.len() > 0 && crate::common::is_supported_uni_link(&args[0]) {
         return try_send_by_dbus(args[0].clone());
     }
 
@@ -730,6 +730,8 @@ pub fn core_main() -> Option<Vec<String>> {
         }
     }
     //_async_logger_holder.map(|x| x.flush());
+    #[cfg(windows)]
+    crate::platform::ensure_user_uri_schemes();
     #[cfg(feature = "flutter")]
     return Some(flutter_args);
     #[cfg(not(feature = "flutter"))]

@@ -113,6 +113,7 @@ const String kOptionBrandingLogo = "branding-logo";
 const String kOptionBrandingSource = "branding-source";
 const String kOptionBrandingRevision = "branding-revision";
 const String kOptionBrandingAccentColor = "branding-accent-color";
+const String kOptionBrandingBackgroundColor = "branding-background-color";
 const String kOptionBrandingLogoPath = "branding-logo-path";
 const String kBrandingSourceServer = "server";
 const String kOptionAccessMode = "access-mode";

@@ -780,5 +780,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Clear branding", ""),
         ("Logo too large", ""),
         ("Invalid logo format", ""),
+        ("Accent color", "Color de acento"),
+        ("Background color", "Color de fondo"),
+        ("Invalid color", "Color no válido"),
     ].iter().cloned().collect();
 }

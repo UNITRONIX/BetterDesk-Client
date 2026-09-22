@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
+import 'package:flutter_hbb/common/widgets/branding_logo.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
@@ -2432,6 +2433,8 @@ class _BrandingState extends State<_Branding> {
   late final TextEditingController _phoneController;
   late final TextEditingController _emailController;
   late final TextEditingController _websiteController;
+  late final TextEditingController _accentController;
+  late final TextEditingController _backgroundController;
   String? _pendingLogoPath;
   bool _removeLogo = false;
 
@@ -2445,6 +2448,9 @@ class _BrandingState extends State<_Branding> {
     _phoneController = TextEditingController(text: branding.phone.value);
     _emailController = TextEditingController(text: branding.email.value);
     _websiteController = TextEditingController(text: branding.website.value);
+    _accentController = TextEditingController(text: branding.accentColor.value);
+    _backgroundController =
+        TextEditingController(text: branding.backgroundColor.value);
   }
 
   @override
@@ -2453,6 +2459,8 @@ class _BrandingState extends State<_Branding> {
     _phoneController.dispose();
     _emailController.dispose();
     _websiteController.dispose();
+    _accentController.dispose();
+    _backgroundController.dispose();
     super.dispose();
   }
 
@@ -2480,6 +2488,63 @@ class _BrandingState extends State<_Branding> {
     );
   }
 
+  Widget _colorField(String label, String optionKey,
+      TextEditingController controller, Color fallback) {
+    final fixed =
+        isOptionFixed(optionKey) || BrandingModel.current.isManagedByServer;
+    final parsed = BrandingModel.parseHexColor(controller.text);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(translate(label),
+                style: const TextStyle(fontSize: _kContentFontSize))
+            .marginOnly(left: _kContentHMargin, bottom: 4),
+        Row(
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: parsed ?? fallback,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: Theme.of(context).dividerColor,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: controller,
+                enabled: !fixed,
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  hintText: '#RRGGBB',
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+          ],
+        ).marginOnly(
+            left: _kContentHMargin, right: _kContentHMargin, bottom: 10),
+      ],
+    );
+  }
+
+  /// Empty input stays empty. Valid hex becomes `#RRGGBB` or `#AARRGGBB`.
+  /// Returns null when the text is not a color.
+  String? _normalizeColor(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    if (BrandingModel.parseHexColor(trimmed) == null) return null;
+    var hex = trimmed;
+    if (hex.startsWith('#')) hex = hex.substring(1);
+    return '#${hex.toUpperCase()}';
+  }
+
   bool get _logoFixed =>
       isOptionFixed(kOptionBrandingLogo) ||
       BrandingModel.current.isManagedByServer;
@@ -2500,17 +2565,13 @@ class _BrandingState extends State<_Branding> {
                   style: const TextStyle(fontSize: _kContentFontSize))
               .marginOnly(left: _kContentHMargin, bottom: 6),
           if (previewPath != null)
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 200, maxHeight: 80),
-              child: Image.file(
-                File(previewPath),
-                key: ValueKey(
-                    'branding-preview-$previewPath-${branding.logoEpoch.value}'),
-                fit: BoxFit.contain,
-                gaplessPlayback: false,
-                errorBuilder: (ctx, error, stackTrace) =>
-                    const SizedBox.shrink(),
-              ),
+            BrandingLogoImage(
+              path: previewPath,
+              cacheKey:
+                  'branding-preview-$previewPath-${branding.logoEpoch.value}',
+              maxWidth: 200,
+              maxHeight: 80,
+              fit: BoxFit.contain,
             ).marginOnly(left: _kContentHMargin, bottom: 8),
           Row(
             children: [
@@ -2561,6 +2622,12 @@ class _BrandingState extends State<_Branding> {
 
   Future<void> _onSave() async {
     final branding = BrandingModel.current;
+    final accent = _normalizeColor(_accentController.text);
+    final background = _normalizeColor(_backgroundController.text);
+    if (accent == null || background == null) {
+      showToast(translate('Invalid color'));
+      return;
+    }
     if (_removeLogo) {
       await branding.removeLogo();
     } else if (_pendingLogoPath != null) {
@@ -2570,11 +2637,15 @@ class _BrandingState extends State<_Branding> {
         return;
       }
     }
+    _accentController.text = accent;
+    _backgroundController.text = background;
     await branding.save(
       company: _companyController.text,
       phoneValue: _phoneController.text,
       emailValue: _emailController.text,
       websiteValue: _websiteController.text,
+      accentValue: accent,
+      backgroundValue: background,
     );
     setState(() {
       _pendingLogoPath = null;
@@ -2590,6 +2661,8 @@ class _BrandingState extends State<_Branding> {
       _phoneController.clear();
       _emailController.clear();
       _websiteController.clear();
+      _accentController.clear();
+      _backgroundController.clear();
       _pendingLogoPath = null;
       _removeLogo = false;
     });
@@ -2619,6 +2692,13 @@ class _BrandingState extends State<_Branding> {
           _field('Email', kOptionBrandingEmail, _emailController),
           _field('Website', kOptionBrandingWebsite, _websiteController,
               hint: 'https://'),
+          _colorField('Accent color', kOptionBrandingAccentColor,
+              _accentController, MyTheme.accent),
+          _colorField(
+              'Background color',
+              kOptionBrandingBackgroundColor,
+              _backgroundController,
+              Theme.of(context).colorScheme.background),
           if (!managed)
             Row(
               children: [

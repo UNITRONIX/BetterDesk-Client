@@ -2251,13 +2251,20 @@ setEnvTerminalAdmin() {
   bind.mainSetEnv(key: 'IS_TERMINAL_ADMIN', value: 'Y');
 }
 
+/// Canonical `betterdesk://` and legacy `rustdesk://`. Scheme match is case-insensitive.
+bool isSupportedUniLink(String value) {
+  final lower = value.toLowerCase();
+  return lower.startsWith(bind.mainUriPrefixSync().toLowerCase()) ||
+      lower.startsWith('rustdesk://');
+}
+
 // uri link handler
 bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
   List<String>? args;
   if (cmdArgs != null && cmdArgs.isNotEmpty) {
     args = cmdArgs;
     // rustdesk <uri link>
-    if (args[0].startsWith(bind.mainUriPrefixSync())) {
+    if (isSupportedUniLink(args[0])) {
       final uri = Uri.tryParse(args[0]);
       if (uri != null) {
         args = urlLinkToCmdArgs(uri);

@@ -1050,6 +1050,30 @@ pub fn get_uri_prefix() -> String {
     format!("{}://", hbb_common::config::URI_SCHEME)
 }
 
+/// Byte length of a supported link prefix (`betterdesk://` or legacy `rustdesk://`).
+/// The scheme is compared case-insensitively.
+pub fn uni_link_prefix_len(arg: &str) -> Option<usize> {
+    let bytes = arg.as_bytes();
+    for scheme in [
+        hbb_common::config::URI_SCHEME,
+        hbb_common::config::LEGACY_URI_SCHEME,
+    ] {
+        let prefix_len = scheme.len() + 3;
+        if bytes.len() >= prefix_len
+            && bytes[..scheme.len()].eq_ignore_ascii_case(scheme.as_bytes())
+            && &bytes[scheme.len()..prefix_len] == b"://"
+        {
+            return Some(prefix_len);
+        }
+    }
+    None
+}
+
+#[inline]
+pub fn is_supported_uni_link(arg: &str) -> bool {
+    uni_link_prefix_len(arg).is_some()
+}
+
 #[cfg(target_os = "macos")]
 pub fn get_full_name() -> String {
     format!(
@@ -2546,11 +2570,10 @@ fn apply_custom_client_map(data: &[u8]) {
 
 #[inline]
 pub fn is_empty_uni_link(arg: &str) -> bool {
-    let prefix = crate::get_uri_prefix();
-    if !arg.starts_with(&prefix) {
-        return false;
+    match uni_link_prefix_len(arg) {
+        Some(len) => arg[len..].chars().all(|c| c == '/'),
+        None => false,
     }
-    arg[prefix.len()..].chars().all(|c| c == '/')
 }
 
 pub fn get_hwid() -> Bytes {
@@ -3311,6 +3334,18 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("TCP proxy error: dial failed"));
+    }
+
+    #[test]
+    fn test_uni_link_accepts_legacy_rustdesk_scheme() {
+        assert!(is_supported_uni_link("betterdesk://123456789"));
+        assert!(is_supported_uni_link("rustdesk://123456789"));
+        assert!(is_supported_uni_link("RustDesk://123456789/r"));
+        assert!(!is_supported_uni_link("https://example.com"));
+        assert!(!is_supported_uni_link("rustdesk:123"));
+        assert!(is_empty_uni_link("betterdesk://"));
+        assert!(is_empty_uni_link("rustdesk:///"));
+        assert!(!is_empty_uni_link("rustdesk://123"));
     }
 
     #[test]

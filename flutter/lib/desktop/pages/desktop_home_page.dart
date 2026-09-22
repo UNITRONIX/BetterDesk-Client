@@ -1,12 +1,13 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:auto_size_text/auto_size_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/animated_rotation_widget.dart';
+import 'package:flutter_hbb/common/widgets/branding_logo.dart';
 import 'package:flutter_hbb/common/widgets/custom_password.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
@@ -132,9 +133,12 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       child: Obx(() {
         final branding = BrandingModel.current;
         final widePane = branding.hasContactOrLogo;
+        final paneColor = branding.backgroundOr(
+          Theme.of(context).colorScheme.background,
+        );
         return Container(
           width: isIncomingOnly ? 280.0 : (widePane ? 260.0 : 200.0),
-          color: Theme.of(context).colorScheme.background,
+          color: paneColor,
           child: Stack(
             children: [
               Column(
@@ -199,9 +203,13 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: [
-          Container(
-            width: 2,
-            decoration: const BoxDecoration(color: MyTheme.accent),
+          Obx(
+            () => Container(
+              width: 2,
+              decoration: BoxDecoration(
+                color: BrandingModel.current.accentOr(MyTheme.accent),
+              ),
+            ),
           ).marginOnly(top: 5),
           Expanded(
             child: Padding(
@@ -305,10 +313,14 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: [
-          Container(
-            width: 2,
-            height: 52,
-            decoration: BoxDecoration(color: MyTheme.accent),
+          Obx(
+            () => Container(
+              width: 2,
+              height: 52,
+              decoration: BoxDecoration(
+                color: BrandingModel.current.accentOr(MyTheme.accent),
+              ),
+            ),
           ),
           Expanded(
             child: Padding(
@@ -401,7 +413,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         final title = branding.hasCompanyName
             ? branding.companyName.value.trim()
             : translate("Your Desktop");
-        final accent = Theme.of(context).colorScheme.primary;
+        final accent = branding.accentOr(MyTheme.accent);
         final bodyStyle = Theme.of(context).textTheme.bodySmall;
         final textColor = Theme.of(context).textTheme.titleLarge?.color;
         final contactStyle = TextStyle(fontSize: 14, color: textColor);
@@ -423,7 +435,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                   Container(
                     width: 2,
                     height: 18,
-                    decoration: const BoxDecoration(color: MyTheme.accent),
+                    decoration: BoxDecoration(color: accent),
                   ),
                   const SizedBox(width: 7),
                   Icon(icon, size: 16, color: accent),
@@ -463,22 +475,13 @@ class _DesktopHomePageState extends State<DesktopHomePage>
               if (branding.hasLogo.value && branding.logoPath.value.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8.0),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 120),
-                      child: Image.file(
-                        File(branding.logoPath.value),
-                        key: ValueKey(
-                            'branding-home-${branding.logoPath.value}-${branding.logoEpoch.value}'),
-                        width: double.infinity,
-                        fit: BoxFit.fitWidth,
-                        alignment: Alignment.centerLeft,
-                        gaplessPlayback: false,
-                        errorBuilder: (ctx, error, stackTrace) =>
-                            const SizedBox.shrink(),
-                      ),
-                    ),
+                  child: BrandingLogoImage(
+                    path: branding.logoPath.value,
+                    cacheKey:
+                        'branding-home-${branding.logoPath.value}-${branding.logoEpoch.value}',
+                    maxHeight: 120,
+                    fit: BoxFit.fitWidth,
+                    alignment: Alignment.centerLeft,
                   ),
                 ),
               if (phone.isNotEmpty)

@@ -27,6 +27,8 @@ class BrandingModel {
   final hasLogo = false.obs;
   final logoPath = ''.obs;
   final logoEpoch = 0.obs;
+  final accentColor = ''.obs;
+  final backgroundColor = ''.obs;
 
   BrandingModel() {
     load();
@@ -55,6 +57,10 @@ class BrandingModel {
     phone.value = bind.mainGetLocalOption(key: kOptionBrandingPhone);
     email.value = bind.mainGetLocalOption(key: kOptionBrandingEmail);
     website.value = bind.mainGetLocalOption(key: kOptionBrandingWebsite);
+    accentColor.value =
+        bind.mainGetLocalOption(key: kOptionBrandingAccentColor);
+    backgroundColor.value =
+        bind.mainGetLocalOption(key: kOptionBrandingBackgroundColor);
     final logoFlag = bind.mainGetLocalOption(key: kOptionBrandingLogo);
     if (logoFlag == 'Y') {
       _resolveLogoPath().then((p) {
@@ -184,19 +190,28 @@ class BrandingModel {
     required String phoneValue,
     required String emailValue,
     required String websiteValue,
+    required String accentValue,
+    required String backgroundValue,
   }) async {
     final c = company.trim();
     final p = phoneValue.trim();
     final e = emailValue.trim();
     final w = websiteValue.trim();
+    final accent = accentValue.trim();
+    final background = backgroundValue.trim();
     await bind.mainSetLocalOption(key: kOptionBrandingCompanyName, value: c);
     await bind.mainSetLocalOption(key: kOptionBrandingPhone, value: p);
     await bind.mainSetLocalOption(key: kOptionBrandingEmail, value: e);
     await bind.mainSetLocalOption(key: kOptionBrandingWebsite, value: w);
+    await bind.mainSetLocalOption(key: kOptionBrandingAccentColor, value: accent);
+    await bind.mainSetLocalOption(
+        key: kOptionBrandingBackgroundColor, value: background);
     companyName.value = c;
     phone.value = p;
     email.value = e;
     website.value = w;
+    accentColor.value = accent;
+    backgroundColor.value = background;
   }
 
   Future<void> clear() async {
@@ -204,11 +219,36 @@ class BrandingModel {
     await bind.mainSetLocalOption(key: kOptionBrandingPhone, value: '');
     await bind.mainSetLocalOption(key: kOptionBrandingEmail, value: '');
     await bind.mainSetLocalOption(key: kOptionBrandingWebsite, value: '');
+    await bind.mainSetLocalOption(key: kOptionBrandingAccentColor, value: '');
+    await bind.mainSetLocalOption(
+        key: kOptionBrandingBackgroundColor, value: '');
     await removeLogo();
     companyName.value = '';
     phone.value = '';
     email.value = '';
     website.value = '';
+    accentColor.value = '';
+    backgroundColor.value = '';
+  }
+
+  /// Branding accent, or [fallback] when the stored value is empty or not hex.
+  Color accentOr(Color fallback) =>
+      parseHexColor(accentColor.value) ?? fallback;
+
+  /// Branding element background, or [fallback] when unset or invalid.
+  Color backgroundOr(Color fallback) =>
+      parseHexColor(backgroundColor.value) ?? fallback;
+
+  /// `#RRGGBB` or `#AARRGGBB` (leading `#` optional).
+  static Color? parseHexColor(String raw) {
+    var s = raw.trim();
+    if (s.isEmpty) return null;
+    if (s.startsWith('#')) s = s.substring(1);
+    if (s.length == 6) s = 'FF$s';
+    if (s.length != 8) return null;
+    final value = int.tryParse(s, radix: 16);
+    if (value == null) return null;
+    return Color(value);
   }
 
   static String normalizeWebsiteUrl(String raw) {

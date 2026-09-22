@@ -35,6 +35,7 @@ pub const CONN_MODE_INCOMING_ONLY: &str = "incoming-only";
 const OPTION_BRANDING_SOURCE: &str = "branding-source";
 const OPTION_BRANDING_REVISION: &str = "branding-revision";
 const OPTION_BRANDING_ACCENT: &str = "branding-accent-color";
+const OPTION_BRANDING_BACKGROUND: &str = "branding-background-color";
 const OPTION_BRANDING_LOGO_PATH: &str = "branding-logo-path";
 const OPTION_BRANDING_SYNCED_API: &str = "branding-synced-api";
 const BRANDING_SOURCE_SERVER: &str = "server";
@@ -407,6 +408,8 @@ struct BrandingPayload {
     #[serde(default)]
     accent_color: String,
     #[serde(default)]
+    background_color: String,
+    #[serde(default)]
     support_contact: String,
     #[serde(default)]
     logo: Option<BrandingLogoPayload>,
@@ -464,6 +467,7 @@ pub fn clear_server_branding() {
     LocalConfig::set_option(keys::OPTION_BRANDING_LOGO.to_owned(), "".to_owned());
     LocalConfig::set_option(OPTION_BRANDING_LOGO_PATH.to_owned(), "".to_owned());
     LocalConfig::set_option(OPTION_BRANDING_ACCENT.to_owned(), "".to_owned());
+    LocalConfig::set_option(OPTION_BRANDING_BACKGROUND.to_owned(), "".to_owned());
     LocalConfig::set_option(OPTION_BRANDING_SOURCE.to_owned(), "".to_owned());
     LocalConfig::set_option(OPTION_BRANDING_REVISION.to_owned(), "".to_owned());
     LocalConfig::set_option(OPTION_BRANDING_SYNCED_API.to_owned(), "".to_owned());
@@ -574,6 +578,10 @@ fn apply_text_fields(payload: &BrandingPayload) {
         OPTION_BRANDING_ACCENT.to_owned(),
         payload.accent_color.trim().to_owned(),
     );
+    LocalConfig::set_option(
+        OPTION_BRANDING_BACKGROUND.to_owned(),
+        payload.background_color.trim().to_owned(),
+    );
 }
 
 async fn apply_branding_payload(base: &str, payload: BrandingPayload) -> ResultType<()> {
@@ -592,6 +600,8 @@ async fn apply_branding_payload(base: &str, payload: BrandingPayload) -> ResultT
         && payload.phone.trim().is_empty()
         && payload.email.trim().is_empty()
         && payload.website.trim().is_empty()
+        && payload.accent_color.trim().is_empty()
+        && payload.background_color.trim().is_empty()
         && payload
             .logo
             .as_ref()
