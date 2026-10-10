@@ -16,6 +16,7 @@ import '../desktop/pages/server_page.dart' as desktop;
 import '../desktop/widgets/tabbar_widget.dart';
 import '../mobile/pages/server_page.dart';
 import 'model.dart';
+import 'state_model.dart';
 
 const kLoginDialogTag = "LOGIN";
 
@@ -151,6 +152,16 @@ class ServerModel with ChangeNotifier {
       final connectionStatus =
           jsonDecode(await bind.mainGetConnectStatus()) as Map<String, dynamic>;
       final statusNum = connectionStatus['status_num'] as int;
+      final connectionMode =
+          connectionStatus['connection_mode'] as String? ?? '';
+      final connectionModeRevision =
+          connectionStatus['connection_mode_revision'] as int? ?? 0;
+      if (stateGlobal.connectionMode.value != connectionMode) {
+        stateGlobal.connectionMode.value = connectionMode;
+      }
+      if (stateGlobal.connectionModeRevision.value != connectionModeRevision) {
+        stateGlobal.connectionModeRevision.value = connectionModeRevision;
+      }
       if (statusNum != _connectStatus) {
         _connectStatus = statusNum;
         notifyListeners();

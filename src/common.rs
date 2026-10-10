@@ -2374,7 +2374,50 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
     ThrottledInterval::new(i)
 }
 
+const EMBEDDED_SUPPORT_CONFIG_B64: Option<&str> = option_env!("BETTERDESK_SUPPORT_CONFIG_B64");
+const GENERIC_SUPPORT_BUILD: Option<&str> = option_env!("BETTERDESK_GENERIC_SUPPORT");
+
+/// Returns true for the GitHub-built generic Support Agent. It is permanently
+/// incoming-only, but receives its server endpoints during first-run pairing.
+pub fn is_generic_support_client() -> bool {
+    matches!(GENERIC_SUPPORT_BUILD.map(str::trim), Some("1" | "true" | "yes"))
+}
+
+/// Loads the signed Support configuration compiled into this binary.
+///
+/// The payload is intentionally supplied only at build time. A non-empty
+/// value takes precedence over every filesystem or caller-provided config so
+/// a generated incoming-only client cannot be reconfigured into a full client
+/// by placing a `custom.txt` beside it or passing a startup argument.
+pub fn load_embedded_support_client() -> bool {
+    let Some(config) = EMBEDDED_SUPPORT_CONFIG_B64.map(str::trim) else {
+        return false;
+    };
+    if config.is_empty() {
+        return false;
+    }
+
+    read_custom_client(config);
+    if !config::is_permanent_incoming_only() {
+        log::error!(
+            "Embedded BetterDesk Support config was rejected: \
+             the binary did not enter permanent incoming-only mode"
+        );
+    }
+    true
+}
+
 pub fn load_custom_client() {
+    if load_embedded_support_client() {
+        return;
+    }
+    if is_generic_support_client() {
+        apply_custom_client_map(
+            br#"{"app-name":"BetterDesk Support Agent","conn-type":"incoming","disable-settings":"N","override-settings":{"hide-server-settings":"N","hide-help-cards":"N"}}"#,
+        );
+        return;
+    }
+
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());

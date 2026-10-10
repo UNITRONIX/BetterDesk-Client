@@ -1,5 +1,6 @@
 {
   "app-name": "BetterDesk Client",
+  "remote-connection-mode": "Y",
   "default-settings": {
     "custom-rendezvous-server": "desk.example.com",
     "relay-server": "desk.example.com",

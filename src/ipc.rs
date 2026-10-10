@@ -384,6 +384,7 @@ pub enum Data {
     Control(DataControl),
     Theme(String),
     Language(String),
+    ConnectionModeChanged(Option<String>),
     Empty,
     Disconnected,
     DataPortableService(DataPortableService),
@@ -995,6 +996,16 @@ async fn handle(data: Data, stream: &mut Connection) {
                 }
             }
         },
+        Data::ConnectionModeChanged(None) => {
+            allow_err!(
+                stream
+                    .send(&Data::ConnectionModeChanged(Some(
+                        config::connection_mode().to_owned(),
+                    )))
+                    .await
+            );
+        }
+        Data::ConnectionModeChanged(Some(_)) => {}
         Data::Options(value) => match value {
             None => {
                 let v = Config::get_options();

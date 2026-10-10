@@ -2127,6 +2127,33 @@ pub mod sessions {
         sessions.len()
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub fn close_outgoing_sessions() -> usize {
+        crate::keyboard::release_remote_keys("map");
+        let sessions: Vec<FlutterSession> = SESSIONS
+            .write()
+            .unwrap()
+            .drain()
+            .map(|(_, session)| session)
+            .collect();
+        for session in sessions.iter() {
+            let session_ids: Vec<SessionID> = session
+                .ui_handler
+                .session_handlers
+                .read()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect();
+            for session_id in session_ids {
+                session.close_event_stream(session_id);
+            }
+            session.close();
+        }
+        update_session_count_to_server();
+        sessions.len()
+    }
+
     /// Check if removing a session by session_id would result in removing the entire peer.
     ///
     /// Returns:

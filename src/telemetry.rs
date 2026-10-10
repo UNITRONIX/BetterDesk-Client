@@ -33,8 +33,14 @@ const MAX_COMMAND_OUTPUT: usize = 16 * 1024;
 const MAX_FILE_READ: usize = 1024 * 1024;
 const HARDWARE_COLLECTION_INTERVAL: Duration = Duration::from_secs(3600);
 const TELEMETRY_SEQUENCE: &str = "betterdesk-telemetry-sequence";
+const TELEMETRY_RESPONSE_SEQUENCE: &str = "betterdesk-telemetry-response-sequence";
 const RESPONSE_PUBLIC_KEY: &str = "betterdesk-telemetry-response-public-key";
 const RESPONSE_SECRET_KEY: &str = "betterdesk-telemetry-response-secret-key";
+const TELEMETRY_SERVER_KEY_ID: &str = "betterdesk-telemetry-server-key-id";
+const CONNECTION_MODE_NORMAL: &str = "normal";
+const CONNECTION_MODE_INCOMING_ONLY: &str = "incoming-only";
+const CONNECTION_MODE_COMMAND_ID_MAX: usize = 128;
+const CONNECTION_MODE_CLOCK_SKEW_SECS: i64 = 300;
 
 #[derive(Default)]
 struct ActivityWindow {
@@ -270,6 +276,9 @@ pub fn open_response(envelope: &Value) -> Result<Value, String> {
         .get("device_id")
         .and_then(Value::as_str)
         .ok_or_else(|| "response envelope device missing".to_owned())?;
+    if device_id != Config::get_id() {
+        return Err("response envelope device mismatch".to_owned());
+    }
     let sequence = envelope
         .get("sequence")
         .and_then(Value::as_u64)
@@ -278,6 +287,10 @@ pub fn open_response(envelope: &Value) -> Result<Value, String> {
         .get("server_key_id")
         .and_then(Value::as_str)
         .ok_or_else(|| "response envelope key id missing".to_owned())?;
+    let expected_server_key_id = LocalConfig::get_option(TELEMETRY_SERVER_KEY_ID);
+    if !expected_server_key_id.is_empty() && server_key_id != expected_server_key_id {
+        return Err("response envelope server key mismatch".to_owned());
+    }
     let ephemeral = envelope
         .get("ephemeral_public_key")
         .and_then(Value::as_str)
@@ -312,6 +325,12 @@ pub fn open_response(envelope: &Value) -> Result<Value, String> {
     if verified != signing_message.as_bytes() {
         return Err("response envelope identity mismatch".to_owned());
     }
+    let last_sequence = LocalConfig::get_option(TELEMETRY_RESPONSE_SEQUENCE)
+        .parse::<u64>()
+        .unwrap_or(0);
+    if sequence <= last_sequence {
+        return Err("response envelope replay detected".to_owned());
+    }
 
     let ephemeral = STANDARD
         .decode(ephemeral)
@@ -331,7 +350,128 @@ pub fn open_response(envelope: &Value) -> Result<Value, String> {
     let shared_key = secretbox::Key(shared.0);
     let plaintext = secretbox::open(&ciphertext, &nonce, &shared_key)
         .map_err(|_| "response decryption failed".to_owned())?;
-    serde_json::from_slice(&plaintext).map_err(|_| "response JSON invalid".to_owned())
+    let response =
+        serde_json::from_slice(&plaintext).map_err(|_| "response JSON invalid".to_owned())?;
+    LocalConfig::set_option(
+        TELEMETRY_RESPONSE_SEQUENCE.to_owned(),
+        sequence.to_string(),
+    );
+    Ok(response)
+}
+
+fn connection_mode_command_result(
+    command_id: &str,
+    status: &str,
+    code: &str,
+    revision: u64,
+) -> Value {
+    json!({
+        "command_id": command_id,
+        "status": status,
+        "code": code,
+        "revision": revision,
+        "effective_conn_mode": config::connection_mode(),
+    })
+}
+
+fn reject_connection_mode_command(command_id: &str, code: &str) -> Value {
+    let mode = config::LocalConfig::get_connection_mode();
+    let revision = config::LocalConfig::get_connection_mode_revision();
+    config::LocalConfig::set_connection_mode_policy(
+        &mode,
+        revision,
+        &config::LocalConfig::get_connection_mode_command_id(),
+        "rejected",
+        code,
+    );
+    connection_mode_command_result(command_id, "rejected", code, revision)
+}
+
+pub fn process_connection_mode_command(command: &Value) -> Value {
+    let command_id = command
+        .get("command_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if command_id.is_empty() || command_id.len() > CONNECTION_MODE_COMMAND_ID_MAX {
+        return reject_connection_mode_command("", "invalid_command_id");
+    }
+    if !config::is_remote_connection_mode_controlled() {
+        return reject_connection_mode_command(command_id, "remote_control_not_enabled");
+    }
+    let target_id = command
+        .get("target_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let target_uuid = command
+        .get("target_uuid")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if target_id != Config::get_id()
+        || target_uuid != crate::encode64(hbb_common::get_uuid())
+    {
+        return reject_connection_mode_command(command_id, "target_mismatch");
+    }
+    let mode = command
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(mode, CONNECTION_MODE_NORMAL | CONNECTION_MODE_INCOMING_ONLY) {
+        return reject_connection_mode_command(command_id, "unsupported_mode");
+    }
+    let revision = match command.get("revision").and_then(Value::as_u64) {
+        Some(value) if value > 0 => value,
+        _ => return reject_connection_mode_command(command_id, "invalid_revision"),
+    };
+    let issued_at = match command.get("issued_at").and_then(Value::as_i64) {
+        Some(value) => value,
+        None => return reject_connection_mode_command(command_id, "invalid_issued_at"),
+    };
+    let expires_at = match command.get("expires_at").and_then(Value::as_i64) {
+        Some(value) => value,
+        None => return reject_connection_mode_command(command_id, "invalid_expires_at"),
+    };
+    let now = hbb_common::get_time() / 1000;
+    if issued_at > now.saturating_add(CONNECTION_MODE_CLOCK_SKEW_SECS)
+        || expires_at <= now
+        || expires_at <= issued_at
+    {
+        return reject_connection_mode_command(command_id, "command_expired_or_not_yet_valid");
+    }
+
+    let current_revision = config::LocalConfig::get_connection_mode_revision();
+    let current_command_id = config::LocalConfig::get_connection_mode_command_id();
+    if current_command_id == command_id && revision != current_revision {
+        return reject_connection_mode_command(command_id, "duplicate_command_id");
+    }
+    if revision < current_revision {
+        return reject_connection_mode_command(command_id, "stale_revision");
+    }
+    if revision == current_revision {
+        if current_command_id == command_id {
+            return connection_mode_command_result(
+                command_id,
+                "already_applied",
+                "duplicate",
+                current_revision,
+            );
+        }
+        return reject_connection_mode_command(command_id, "revision_conflict");
+    }
+
+    let previous_mode = config::connection_mode();
+    config::LocalConfig::set_connection_mode_policy(
+        mode,
+        revision,
+        command_id,
+        "applied",
+        "",
+    );
+    let status = if previous_mode == mode {
+        "already_applied"
+    } else {
+        "applied"
+    };
+    connection_mode_command_result(command_id, status, "ok", revision)
 }
 
 fn home_directory() -> Option<PathBuf> {

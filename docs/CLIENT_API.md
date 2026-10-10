@@ -131,13 +131,56 @@ Auth konta / AB: zwykle `Authorization: Bearer {access_token}` z `LocalConfig`.
 |------|----------|-----------|
 | `device_type` / `client` / `client_product` | `betterdesk-desktop` | Legacy marker (nie używać do rozróżnienia Support) |
 | `product_sku` | `betterdesk-desktop` \| `betterdesk-support` | SKU Generatora; Support gdy bake-in `conn-type: incoming` |
-| `conn_mode` | `normal` \| `incoming-only` | Tryb zastosowany lokalnie (`HARD_SETTINGS`) |
+| `conn_mode` | `normal` \| `incoming-only` | Effective mode; bake-in Support Agent pochodzi z `HARD_SETTINGS` |
 | `app_name` | string | Nazwa z bake-in / APP_NAME |
-| `tags` (register) | `betterdesk-desktop` albo `betterdesk-support,incoming-only` | Kompatybilne tagi enrollment |
+| `tags` (register) | `betterdesk-desktop`, `betterdesk-desktop,incoming-only` albo `betterdesk-support,incoming-only` | Kompatybilne tagi enrollment |
 | `enrollment_status` | opcjonalnie | Lokalny status enroll |
 | `branding_revision` / `branding_source` | opcjonalnie | Sync brandingu do device details |
 
-**Panel:** zapisz te pola przy heartbeat/sysinfo/register i pokaż w szczegółach urządzenia. Support Agent (`product_sku=betterdesk-support`) nie może być „przełączony” na full przez strategy — klient ignoruje fixed/lockdown opcje; serwer nie powinien takich wysyłać.
+Klient z capability `connection-mode.remote-control` wysyła dodatkowo
+`effective_conn_mode`, `policy_revision`, `policy_status`, `last_command_id`
+i ewentualnie `policy_error`. Pełny klient przełączony zdalnie na incoming-only
+zachowuje `product_sku=betterdesk-desktop` i otrzymuje tag
+`betterdesk-desktop,incoming-only`; tylko bake-in Support Agent ma
+`product_sku=betterdesk-support`.
+
+**Panel:** zapisz te pola przy heartbeat/sysinfo/register i pokaż w szczegółach
+urządzenia. Permanentny Support Agent nie może być „przełączony” na full przez
+strategy ani komendę API; klient odrzuca taką próbę.
+
+### 4.3.2. Podpisane polecenie trybu
+
+Operator panelu może umieścić w zaszyfrowanej odpowiedzi heartbeat pole
+`connection_mode_command`:
+
+```json
+{
+  "command_id": "uuid",
+  "revision": 12,
+  "target_id": "123456789",
+  "target_uuid": "base64-device-uuid",
+  "mode": "incoming-only",
+  "issued_at": 1780000000,
+  "expires_at": 1780000600,
+  "reason": "support session"
+}
+```
+
+Komenda jest akceptowana wyłącznie wewnątrz `betterdesk_envelope` dostarczonego
+przez HTTPS. Klient sprawdza podpis serwera względem bake-in `key`, urządzenie
+docelowe, tryb, czas ważności oraz trwałą monotoniczną rewizję. Plaintext
+`strategy` nie może zmieniać trybu.
+
+Po `normal` → `incoming-only` klient najpierw blokuje nowe połączenia
+wychodzące, zamyka aktywne sesje wychodzące i pozostawia sesje przychodzące.
+Powrót do `normal` nie wznawia automatycznie zamkniętych sesji. Ostatnia
+potwierdzona polityka pozostaje aktywna po restarcie i przy chwilowej
+niedostępności API.
+
+Stan zastosowania jest raportowany w następnym heartbeat przez
+`effective_conn_mode`, `policy_revision`, `last_command_id`, `policy_status`
+i `policy_error`. Logowanie konta/OIDC oraz `access_token` nie są automatycznie
+usuwane; zmiana trybu dotyczy połączeń zdalnego pulpitu, nie sesji konta.
 
 Szczegóły produktowe: [OFFICIAL_CLIENT.md](OFFICIAL_CLIENT.md) (sekcja Dualizm SKU).
 

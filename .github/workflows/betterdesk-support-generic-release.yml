@@ -1,0 +1,202 @@
+name: BetterDesk Support Agent generic release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Commit, branch or tag to build"
+        required: false
+        default: ""
+        type: string
+      publish_release:
+        description: "Publish a GitHub Release"
+        required: false
+        default: true
+        type: boolean
+  push:
+    tags:
+      - "support-v*"
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('support-{0}', github.sha) }}
+
+jobs:
+  build:
+    name: Build generic incoming-only clients
+    uses: ./.github/workflows/flutter-build.yml
+    with:
+      upload-artifact: true
+      upload-tag: generic-${{ github.sha }}
+      source-ref: ${{ inputs.source_ref || github.sha }}
+      generic-support: true
+    secrets: inherit
+
+  package:
+    name: Package and verify generic agents
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Download Windows x64
+        uses: actions/download-artifact@v4
+        with:
+          name: rustdesk-unsigned-windows-x86_64
+          path: raw/windows-x86_64
+
+      - name: Download Windows ARM64
+        uses: actions/download-artifact@v4
+        with:
+          name: rustdesk-unsigned-windows-aarch64
+          path: raw/windows-aarch64
+
+      - name: Download macOS Intel
+        uses: actions/download-artifact@v4
+        with:
+          name: betterdesk-unsigned-macos-x86_64
+          path: raw/macos-x86_64
+
+      - name: Download macOS ARM64
+        uses: actions/download-artifact@v4
+        with:
+          name: betterdesk-unsigned-macos-aarch64
+          path: raw/macos-aarch64
+
+      - name: Download Linux x64 package
+        uses: actions/download-artifact@v4
+        with:
+          pattern: betterdesk-*-x86_64.deb
+          path: raw/linux-x86_64
+          merge-multiple: true
+
+      - name: Download Linux ARM64 package
+        uses: actions/download-artifact@v4
+        with:
+          pattern: betterdesk-*-aarch64.deb
+          path: raw/linux-aarch64
+          merge-multiple: true
+
+      - name: Package and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out stage
+
+          package_windows() {
+            local arch="$1"
+            local source="raw/windows-${arch}"
+            test -d "$source"
+            ! find "$source" \( -iname custom.txt -o -name .custom-txt-here \) -print -quit | grep -q .
+            (cd "$source" && zip -qr "../../out/betterdesk-support-generic-windows-${arch}.zip" .)
+          }
+
+          package_macos() {
+            local arch="$1"
+            local source="raw/macos-${arch}"
+            local archive
+            archive="$(find "$source" -type f -name '*-app.tar.gz' -print -quit)"
+            test -n "$archive"
+            mkdir -p "stage/macos-${arch}"
+            tar -xzf "$archive" -C "stage/macos-${arch}"
+            ! find "stage/macos-${arch}" \( -iname custom.txt -o -name .custom-txt-here \) -print -quit | grep -q .
+            tar -C stage -czf "out/betterdesk-support-generic-macos-${arch}.tar.gz" "macos-${arch}"
+          }
+
+          package_linux() {
+            local arch="$1"
+            local deb
+            deb="$(find "raw/linux-${arch}" -type f -name '*.deb' -print -quit)"
+            test -n "$deb"
+            mkdir -p "stage/linux-${arch}/root"
+            dpkg-deb -x "$deb" "stage/linux-${arch}/root"
+            ! find "stage/linux-${arch}" \( -iname custom.txt -o -name .custom-txt-here \) -print -quit | grep -q .
+            tar -C "stage/linux-${arch}" -czf "out/betterdesk-support-generic-linux-${arch}.tar.gz" root
+          }
+
+          package_windows x86_64
+          package_windows aarch64
+          package_macos x86_64
+          package_macos aarch64
+          package_linux x86_64
+          package_linux aarch64
+
+          python3 - <<'PY'
+          import hashlib, json, re
+          from pathlib import Path
+
+          assets = []
+          for item in sorted(Path("out").iterdir()):
+              if item.is_file():
+                  name = item.name
+                  parts = name.removeprefix("betterdesk-support-generic-")
+                  match = re.match(r"^(windows|linux|macos)-([a-z0-9_]+)\.(?:zip|tar\.gz)$", parts)
+                  if not match:
+                      raise SystemExit(f"unexpected generic asset name: {name}")
+                  platform, arch = match.groups()
+                  fmt = "portable"
+                  assets.append({
+                      "name": name,
+                      "platform": platform,
+                      "arch": arch,
+                      "format": fmt,
+                      "sha256": hashlib.sha256(item.read_bytes()).hexdigest(),
+                      "size": item.stat().st_size,
+                  })
+          manifest = {
+              "schema_version": 1,
+              "sku": "betterdesk-support",
+              "generic": True,
+              "source_commit": "${{ github.sha }}",
+              "external_config": False,
+              "assets": assets,
+          }
+          (Path("out") / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          (Path("out") / "SHA256SUMS").write_text(
+              "".join(f"{a['sha256']}  {a['name']}\n" for a in assets)
+          )
+          PY
+
+          python3 -m pip install --disable-pip-version-check PyNaCl
+          BETTERDESK_SUPPORT_RELEASE_SIGNING_SEED="${{ secrets.BETTERDESK_SUPPORT_RELEASE_SIGNING_SEED }}" \
+            python3 scripts/sign_release_manifest.py out/manifest.json out/manifest.sig
+
+          ! find out \( -iname custom.txt -o -name .custom-txt-here \) -print -quit | grep -q .
+
+      - name: Upload generic release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: betterdesk-support-generic-${{ github.sha }}
+          path: out
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/support-v') || inputs.publish_release
+    needs: package
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download generic release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: betterdesk-support-generic-${{ github.sha }}
+          path: out
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/support-v') || inputs.publish_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ "$tag" != support-v* ]]; then
+            tag="support-v0.0.${GITHUB_RUN_NUMBER}"
+          fi
+          gh release create "$tag" out/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "BetterDesk Support Agent $tag" \
+            --notes "Generic incoming-only agents. Server configuration is completed during first run and is not embedded in these artifacts."

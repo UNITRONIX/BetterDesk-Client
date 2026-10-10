@@ -42,7 +42,10 @@ fn initialize(app_dir: &str, custom_client_config: &str) {
         *config::APP_DIR.write().unwrap() = app_dir.to_owned();
     }
     // core_main's load_custom_client does not work for flutter since it is only applied to its load_library in main.c
-    if custom_client_config.is_empty() {
+    if crate::load_embedded_support_client() {
+        // The compile-time Support profile is authoritative. Ignore any
+        // caller-provided config so the generated binary stays incoming-only.
+    } else if custom_client_config.is_empty() {
         crate::load_custom_client();
     } else {
         crate::read_custom_client(custom_client_config);
@@ -2941,7 +2944,7 @@ pub mod server_side {
             *config::APP_HOME_DIR.write().unwrap() = home_dir.into();
         }
         if let Ok(custom_client_config) = env.get_string(&custom_client_config) {
-            if !custom_client_config.is_empty() {
+            if !crate::load_embedded_support_client() && !custom_client_config.is_empty() {
                 let custom_client_config: String = custom_client_config.into();
                 crate::read_custom_client(&custom_client_config);
             }

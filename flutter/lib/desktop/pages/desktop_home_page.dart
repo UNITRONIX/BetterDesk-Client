@@ -13,7 +13,6 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
-import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
 import 'package:flutter_hbb/models/branding_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
@@ -21,7 +20,9 @@ import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/platform_channel.dart';
 import 'package:get/get.dart';
+import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:window_size/window_size.dart' as window_size;
@@ -42,6 +43,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   @override
   bool get wantKeepAlive => true;
+
   var systemError = '';
   StreamSubscription? _uniLinksSubscription;
   var svcStopped = false.obs;
@@ -51,6 +53,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   var watchIsCanRecordAudio = false;
   Timer? _updateTimer;
   bool isCardClosed = false;
+  final _genericServerController = TextEditingController();
+  var _genericSetupBusy = false;
+  var _genericSetupMessage = '';
 
   final RxBool _editHover = false.obs;
   final RxBool _block = false.obs;
@@ -80,6 +85,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   Widget buildLeftPane(BuildContext context) {
     final isIncomingOnly = bind.isIncomingOnly();
     final isOutgoingOnly = bind.isOutgoingOnly();
+    final isGenericSupport = isIncomingOnly &&
+        bind.mainGetOptionSync(key: 'api-server').trim().isEmpty;
     final children = <Widget>[
       if (!isOutgoingOnly) buildPresetPasswordWarning(),
       if (bind.isCustomClient())
@@ -92,6 +99,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         child: loadLogo(),
       ),
       buildTip(context),
+      if (isGenericSupport) buildGenericSupportSetup(context),
+      if (isIncomingOnly && !isGenericSupport) buildGenericPairingQr(context),
       if (!isOutgoingOnly) buildIDBoard(context),
       if (!isOutgoingOnly) buildPasswordBoard(context),
       FutureBuilder<Widget>(
@@ -185,6 +194,144 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         );
       }),
     );
+  }
+
+  Widget buildGenericSupportSetup(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: borderColor.withOpacity(.45)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Connect BetterDesk Support',
+              style: theme.textTheme.titleSmall),
+          const SizedBox(height: 6),
+          const Text(
+            'Enter the public BetterDesk address. The server will provide the remaining configuration after activation.',
+            style: TextStyle(fontSize: 11),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _genericServerController,
+            keyboardType: TextInputType.url,
+            decoration: const InputDecoration(
+              labelText: 'BetterDesk server',
+              hintText: 'https://support.example.com',
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _genericSetupBusy ? null : _configureGenericSupport,
+              child: _genericSetupBusy
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Connect'),
+            ),
+          ),
+          if (_genericSetupMessage.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(_genericSetupMessage,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: theme.colorScheme.error,
+                )),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget buildGenericPairingQr(BuildContext context) {
+    final server = bind.mainGetOptionSync(key: 'api-server').trim();
+    final deviceId = gFFI.serverModel.serverId.text.trim();
+    if (server.isEmpty || deviceId.isEmpty || deviceId == 'Generating ...') {
+      return const SizedBox.shrink();
+    }
+    final payload = jsonEncode({
+      'type': 'betterdesk-agent-pairing',
+      'version': 1,
+      'server': server,
+      'device_id': deviceId,
+    });
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        children: [
+          const Text('Activate this agent from the BetterDesk panel',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          QrImageView(data: payload, size: 170, backgroundColor: Colors.white),
+          const SizedBox(height: 4),
+          Text(deviceId, textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 10)),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _configureGenericSupport() async {
+    final input = _genericServerController.text.trim();
+    Uri? parsed;
+    try {
+      parsed = Uri.parse(input);
+    } catch (_) {}
+    if (parsed == null ||
+        !parsed.hasAuthority ||
+        !{'http', 'https'}.contains(parsed.scheme.toLowerCase())) {
+      setState(() => _genericSetupMessage = 'Use a valid http(s) server address.');
+      return;
+    }
+    final origin = Uri(
+      scheme: parsed.scheme.toLowerCase(),
+      host: parsed.host,
+      port: parsed.hasPort ? parsed.port : null,
+    ).toString().replaceFirst(RegExp(r'/$'), '');
+    setState(() {
+      _genericSetupBusy = true;
+      _genericSetupMessage = '';
+    });
+    try {
+      final response = await http.get(Uri.parse('$origin/api/server-key'));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw Exception('Server key request failed (${response.statusCode}).');
+      }
+      final decoded = jsonDecode(response.body);
+      final serverKey = decoded is Map ? (decoded['key'] ?? '') : '';
+      if (serverKey is! String || serverKey.trim().isEmpty) {
+        throw Exception('The server did not return its public key.');
+      }
+      final authority = parsed.host +
+          (parsed.hasPort ? ':${parsed.port}' : '');
+      await bind.mainSetOption(key: 'custom-rendezvous-server', value: authority);
+      await bind.mainSetOption(key: 'relay-server', value: authority);
+      await bind.mainSetOption(key: 'api-server', value: origin);
+      await bind.mainSetOption(key: 'key', value: serverKey.trim());
+      if (mounted) setState(() => _genericSetupMessage = '');
+    } catch (error) {
+      if (mounted) {
+        setState(() => _genericSetupMessage = error.toString().replaceFirst('Exception: ', ''));
+      }
+    } finally {
+      if (mounted) setState(() => _genericSetupBusy = false);
+    }
   }
 
   buildRightPane(BuildContext context) {
@@ -934,6 +1081,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   @override
   void dispose() {
+    _genericServerController.dispose();
     _uniLinksSubscription?.cancel();
     Get.delete<RxBool>(tag: 'stop-service');
     _updateTimer?.cancel();

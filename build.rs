@@ -76,8 +76,30 @@ fn install_android_deps() {
     println!("cargo:rustc-link-lib=OpenSLES");
 }
 
+fn validate_embedded_support_config() {
+    println!("cargo:rerun-if-env-changed=BETTERDESK_SUPPORT_CONFIG_B64");
+    println!("cargo:rerun-if-env-changed=BETTERDESK_GENERIC_SUPPORT");
+
+    let Ok(value) = std::env::var("BETTERDESK_SUPPORT_CONFIG_B64") else {
+        return;
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        panic!("BETTERDESK_SUPPORT_CONFIG_B64 must not be empty when provided");
+    }
+    if value.len() < 128
+        || value.len() % 4 != 0
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+    {
+        panic!("BETTERDESK_SUPPORT_CONFIG_B64 is not a valid signed base64 payload");
+    }
+}
+
 fn main() {
     hbb_common::gen_version();
+    validate_embedded_support_config();
     install_android_deps();
     #[cfg(all(windows, feature = "inline"))]
     build_manifest();

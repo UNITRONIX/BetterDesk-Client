@@ -49,7 +49,7 @@ const ENROLLMENT_RETRY_SECS: u64 = 120;
 /// Applied SKU from bake-in (`conn-type: incoming` → Support Agent).
 #[inline]
 pub fn product_sku() -> &'static str {
-    if config::is_incoming_only() {
+    if config::is_permanent_incoming_only() {
         PRODUCT_SKU_SUPPORT
     } else {
         PRODUCT_SKU_DESKTOP
@@ -59,15 +59,31 @@ pub fn product_sku() -> &'static str {
 /// Applied connection mode from `HARD_SETTINGS` (not a server wish).
 #[inline]
 pub fn conn_mode() -> &'static str {
-    if config::is_incoming_only() {
-        CONN_MODE_INCOMING_ONLY
-    } else {
-        CONN_MODE_NORMAL
+    match config::connection_mode() {
+        "incoming-only" => CONN_MODE_INCOMING_ONLY,
+        _ => CONN_MODE_NORMAL,
     }
 }
 
+pub fn connection_policy_fields() -> Value {
+    let mut out = serde_json::json!({
+        "effective_conn_mode": conn_mode(),
+        "policy_revision": LocalConfig::get_connection_mode_revision(),
+        "policy_status": LocalConfig::get_connection_mode_status(),
+    });
+    let command_id = LocalConfig::get_connection_mode_command_id();
+    if !command_id.is_empty() {
+        out["last_command_id"] = Value::String(command_id);
+    }
+    let error = LocalConfig::get_connection_mode_error();
+    if !error.is_empty() {
+        out["policy_error"] = Value::String(error);
+    }
+    out
+}
+
 pub fn device_capabilities() -> Vec<&'static str> {
-    let capabilities = vec![
+    let mut capabilities = vec![
         "remote_desktop",
         "telemetry.metrics",
         "inventory.hardware",
@@ -85,6 +101,9 @@ pub fn device_capabilities() -> Vec<&'static str> {
         "process.terminate",
         "restart",
     ];
+    if config::is_remote_connection_mode_controlled() {
+        capabilities.push("connection-mode.remote-control");
+    }
     // Incoming-only restricts the connection direction, not the features
     // available after an approved operator session.
     capabilities
@@ -101,6 +120,13 @@ pub fn device_identity_fields() -> Value {
         "app_name": crate::get_app_name(),
         "capabilities": device_capabilities(),
     });
+    if config::is_remote_connection_mode_controlled() {
+        if let Some(object) = connection_policy_fields().as_object() {
+            for (key, value) in object {
+                out[key] = value.clone();
+            }
+        }
+    }
     if !enrollment_status.is_empty() {
         out["enrollment_status"] = Value::String(enrollment_status);
     }
@@ -272,6 +298,10 @@ pub async fn fetch_telemetry_server_key() -> ResultType<(String, String)> {
     }
     let mut cache = TELEMETRY_SERVER_KEY.lock().unwrap();
     *cache = Some((key_id.clone(), public_key.clone(), signature, Instant::now()));
+    LocalConfig::set_option(
+        "betterdesk-telemetry-server-key-id".to_owned(),
+        key_id.clone(),
+    );
     Ok((key_id, public_key))
 }
 
@@ -329,8 +359,10 @@ pub async fn sync_device_enrollment() {
         "version": crate::VERSION,
         // Keep legacy device_type so the server does not take the old CDAP proof path.
         "device_type": CLIENT_PRODUCT,
-        "tags": if config::is_incoming_only() {
+        "tags": if config::is_permanent_incoming_only() {
             "betterdesk-support,incoming-only"
+        } else if config::is_incoming_only() {
+            "betterdesk-desktop,incoming-only"
         } else {
             "betterdesk-desktop"
         },

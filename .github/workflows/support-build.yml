@@ -1,0 +1,154 @@
+name: BetterDesk embedded Support build
+
+on:
+  workflow_dispatch:
+    inputs:
+      generation_id:
+        description: "BetterDesk generation identifier"
+        required: true
+        type: string
+      config_b64:
+        description: "Signed Support config embedded at compile time"
+        required: true
+        type: string
+      client_commit:
+        description: "Expected BetterDesk-Client commit"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    env:
+      BETTERDESK_SUPPORT_CONFIG_B64: ${{ inputs.config_b64 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.client_commit }}
+      - name: Validate incoming-only payload
+        run: |
+          python3 -m pip install --disable-pip-version-check PyNaCl
+          python3 scripts/validate_embedded_support_config.py
+
+  build:
+    needs: validate
+    uses: ./.github/workflows/flutter-build.yml
+    with:
+      upload-artifact: true
+      upload-tag: support-${{ inputs.generation_id }}
+      support-config-b64: ${{ inputs.config_b64 }}
+      source-ref: ${{ inputs.client_commit }}
+    secrets: inherit
+
+  package:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download Windows builds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rustdesk-unsigned-windows-*
+          path: raw/windows
+          merge-multiple: false
+
+      - name: Download macOS builds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: betterdesk-unsigned-macos-*
+          path: raw/macos
+          merge-multiple: false
+
+      - name: Download Linux x86_64 build
+        uses: actions/download-artifact@v4
+        with:
+          pattern: betterdesk-*-x86_64.deb
+          path: raw/linux-x86_64
+          merge-multiple: true
+
+      - name: Download Linux aarch64 build
+        uses: actions/download-artifact@v4
+        with:
+          pattern: betterdesk-*-aarch64.deb
+          path: raw/linux-aarch64
+          merge-multiple: true
+
+      - name: Package embedded Support artifacts
+        shell: bash
+        env:
+          GENERATION_ID: ${{ inputs.generation_id }}
+          CLIENT_COMMIT: ${{ inputs.client_commit }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+
+          for arch in x86_64 aarch64; do
+            src="$(find "raw/windows" -type d -path "*rustdesk-unsigned-windows-${arch}/rustdesk" -print -quit)"
+            test -n "${src}"
+            mkdir -p "stage/windows-${arch}"
+            cp -a "${src}/." "stage/windows-${arch}/"
+            if find "stage/windows-${arch}" -iname custom.txt -o -name .custom-txt-here | grep -q .; then
+              echo "External config found in Windows artifact" >&2
+              exit 1
+            fi
+            (cd stage && zip -qr "../out/betterdesk-support-${GENERATION_ID}-windows-${arch}.zip" "windows-${arch}")
+          done
+
+          for arch in x86_64 aarch64; do
+            archive="$(find "raw/macos" -type f -name "*-${arch}-app.tar.gz" -print -quit)"
+            test -n "${archive}"
+            mkdir -p "stage/macos-${arch}"
+            tar -xzf "${archive}" -C "stage/macos-${arch}"
+            if find "stage/macos-${arch}" -iname custom.txt -o -name .custom-txt-here | grep -q .; then
+              echo "External config found in macOS artifact" >&2
+              exit 1
+            fi
+            tar -C stage -czf "out/betterdesk-support-${GENERATION_ID}-macos-${arch}.tar.gz" "macos-${arch}"
+          done
+
+          for arch in x86_64 aarch64; do
+            deb="$(find "raw/linux-${arch}" -type f -name '*.deb' -print -quit)"
+            test -n "${deb}"
+            mkdir -p "stage/linux-${arch}/root"
+            dpkg-deb -x "${deb}" "stage/linux-${arch}/root"
+            if find "stage/linux-${arch}" -iname custom.txt -o -name .custom-txt-here | grep -q .; then
+              echo "External config found in Linux artifact" >&2
+              exit 1
+            fi
+            tar -C "stage/linux-${arch}" -czf "out/betterdesk-support-${GENERATION_ID}-linux-${arch}.tar.gz" root
+          done
+
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+
+          root = Path("out")
+          assets = []
+          for item in sorted(root.iterdir()):
+              if item.is_file():
+                  assets.append({
+                      "name": item.name,
+                      "sha256": hashlib.sha256(item.read_bytes()).hexdigest(),
+                      "size": item.stat().st_size,
+                  })
+          manifest = {
+              "schema_version": 1,
+              "sku": "betterdesk-support",
+              "generation_id": os.environ["GENERATION_ID"],
+              "client_commit": os.environ["CLIENT_COMMIT"],
+              "assets": assets,
+              "external_config": False,
+          }
+          (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+
+          ! find out -iname custom.txt -o -name .custom-txt-here | grep -q .
+
+      - name: Upload embedded Support artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: betterdesk-support-${{ inputs.generation_id }}
+          path: out

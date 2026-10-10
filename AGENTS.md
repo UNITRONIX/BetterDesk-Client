@@ -10,7 +10,7 @@
 - Connection model (BetterDesk / P2P / LAN / API): [docs/CONNECTIVITY.md](docs/CONNECTIVITY.md).
 - Official BetterDesk client (no public rustdesk.com, Generator bake-in): [docs/OFFICIAL_CLIENT.md](docs/OFFICIAL_CLIENT.md).
 - Client API layers (HTTP / FFI / IPC): [docs/CLIENT_API.md](docs/CLIENT_API.md).
-- CI builds **desktop agents only** (Windows / Linux / macOS, installers + portable; never permanent incoming-only): [`.github/workflows/betterdesk-desktop-release.yml`](.github/workflows/betterdesk-desktop-release.yml).
+- CI builds **desktop agents** (Windows / Linux / macOS) and can publish generic permanent incoming-only Support Agents through [`.github/workflows/betterdesk-support-generic-release.yml`](.github/workflows/betterdesk-support-generic-release.yml). Generic releases contain no server-specific secrets or endpoints.
 - Required submodule: `git submodule update --init --recursive` for `libs/hbb_common`.
 
 ## Project Layout

@@ -5,7 +5,7 @@ Ten fork ([BetterDesk-Client](../)) jest **oficjalnym klientem desktop BetterDes
 1. **Nie łączy się** z publiczną infrastrukturą rustdesk.com.
 2. Użytkownik **wpisuje** ID / Relay / API / Key (Settings → Network) lub importuje deploy string z panelu.
 3. Klient **identyfikuje się** wobec API jako `betterdesk-desktop` (`device_type` / `client_product`) oraz jawnym `product_sku` (`betterdesk-desktop` | `betterdesk-support`).
-4. Mechanizmy bake-in (`custom.txt`, MSI template, deploy string) są zachowane pod **Client Generator** w panelu web (dwa SKU — dualizm poniżej).
+4. Mechanizmy konfiguracji (`BETTERDESK_SUPPORT_CONFIG_B64`, deploy string i legacy `custom.txt`) są zachowane pod **Client Generator** w panelu web (dwa SKU — dualizm poniżej).
 
 ## Kill public cloud
 
@@ -35,7 +35,10 @@ Deploy string = `reverse(base64({host,relay,api,key}))` — ten sam format co st
 - exe / proces — `betterdesk` (`betterdesk.exe` na Windows)
 - `client` / `client_product` / `device_type` — zawsze `betterdesk-desktop` (`BETTERDESK_CLIENT_PRODUCT`; legacy CDAP-safe)
 - `product_sku` — `betterdesk-desktop` (pełny) albo `betterdesk-support` (bake-in incoming-only)
-- `conn_mode` — `normal` albo `incoming-only` (wynik `HARD_SETTINGS`, nie życzenie serwera)
+- `conn_mode` — `normal` albo `incoming-only` (effective mode; permanent Support
+  Agent wynika z `HARD_SETTINGS`, pełny klient może mieć podpisaną politykę z API)
+- `effective_conn_mode`, `policy_revision`, `policy_status` — stan zdalnej
+  polityki dla klientów z capability `connection-mode.remote-control`
 - opcjonalnie `enrollment_status`, `branding_revision`, `branding_source`
 - `license` — `AGPL-3.0-only`
 - `upstream_project` / `upstream_repo` — RustDesk + `https://github.com/rustdesk/rustdesk`
@@ -45,20 +48,30 @@ Helper HTTP: [`src/hbbs_http/betterdesk.rs`](../src/hbbs_http/betterdesk.rs) (`/
 
 ## Dualizm SKU (Full Client vs Support Agent)
 
-Generator w panelu buduje **dwa** artefakty z tego samego binariów + różnego `custom.txt`. **Nie ma** zdalnego przełączania full ↔ support.
+Generator w panelu buduje **dwa** warianty produktu z tego samego źródła. Pełny
+klient pozostaje konfigurowalny, natomiast Support ma profil serwera embedded
+wkompilowany podczas builda i nie używa `custom.txt`. Pełny klient może mieć osobno włączone odwracalne sterowanie
+effective mode przez API; nie zmienia ono SKU ani nie osłabia permanentnego
+Support Agent.
 
 | SKU | Generator / bake-in | Tryb pulpitu | Serwery / klucz | Branding | Strategy / API config |
 |-----|---------------------|--------------|-----------------|----------|------------------------|
-| **BetterDesk Client** (pełny) | `examples/betterdesk-custom.example.json` lub profil full | Normalny (outbound + inbound) | `default-settings` lub fleet `override-settings` | `GET /api/branding` | Heartbeat `strategy` + enrollment + sysinfo |
-| **BetterDesk Support Agent** | `product_type: betterdesk-support` / [`betterdesk-support-agent.example.json`](../examples/betterdesk-support-agent.example.json) | **Na stałe** `conn-type: incoming` | Sztywno w `override-settings` + `hide-server-settings` | Ten sam `/api/branding` | Branding + enrollment/status; **bez** wyjścia z incoming-only |
+| **BetterDesk Client** (pełny) | `examples/betterdesk-custom.example.json` lub profil full | Normalny domyślnie; opcjonalnie zdalnie `incoming-only` | `default-settings` lub fleet `override-settings` | `GET /api/branding` | Heartbeat `strategy` + enrollment + sysinfo + podpisana komenda trybu |
+| **BetterDesk Support Agent** | `product_type: betterdesk-support` / embedded Support workflow | **Na stałe** `conn-type: incoming` | Wkompilowane w podpisanym payloadzie + `hide-server-settings` | Ten sam `/api/branding` | Branding + enrollment/status; **bez** wyjścia z incoming-only |
 
 **Enforcement (panel / API — poza tym repo):**
 
 - Przy register/heartbeat: jeśli `product_sku=betterdesk-support` (lub tagi `betterdesk-support,incoming-only`), oznacz urządzenie jako Support Agent.
 - Nie wysyłaj strategii usuwającej incoming-only ani zmieniającej serwery floty Support w sposób conflicting.
-- UI panelu nie oferuje „przełącz na full”; device details pokazują `product_sku`, `conn_mode`, enrollment, branding revision.
+- UI panelu może oferować przełączanie tylko dla urządzeń z capability
+  `connection-mode.remote-control`; device details pokazują `product_sku`,
+  `conn_mode`, `policy_revision`, enrollment i branding revision.
 
-**Enforcement (klient):** `conn-type` tylko w `HARD_SETTINGS`; heartbeat `strategy` pomija opcje fixed (`override-settings`) oraz na Support Agent klucze sieciowe / lockdown.
+**Enforcement (klient):** `conn-type` permanentnego Support Agent pozostaje
+tylko w `HARD_SETTINGS`; komendy zmieniające effective mode są akceptowane
+wyłącznie w `betterdesk_envelope`, z podpisem serwera, targetem urządzenia,
+rewizją i czasem ważności. Heartbeat `strategy` nie może zmienić trybu ani
+ominąć zaufanej komendy.
 
 ## Client Branding (runtime, z API)
 
@@ -85,12 +98,12 @@ BetterDesk Client **jest forkiem klienta RustDesk**. W Settings → About oraz w
 
 Stałe: `UPSTREAM_*` / `FORK_REPO_URL` / `LICENSE_*` w [`libs/hbb_common/src/config.rs`](../libs/hbb_common/src/config.rs) oraz [`flutter/lib/consts.dart`](../flutter/lib/consts.dart).
 
-## Bake-in pod Generator (panel)
+## Embedded build pod Generator (panel)
 
 | Mechanizm | Rola |
 |-----------|------|
-| **Plain JSON `custom.txt`** | Phase A — plik zaczyna się od `{`; `default-settings` / `override-settings` |
-| **Signed `custom.txt`** | Phase B — base64(NaCl-sign(JSON)); pubkey w `res/betterdesk/custom-client-signing.pub` |
+| **Compile-time Support config** | Signed base64(NaCl-sign(JSON)) przekazany przez `BETTERDESK_SUPPORT_CONFIG_B64`; payload trafia do binarium |
+| **Plain/signed `custom.txt`** | Legacy/migration only; nie jest wynikiem embedded production builda |
 | **MSI template** | [`res/msi/preprocess.py`](../res/msi/preprocess.py) — cab2 z `custom.txt` + branding |
 | **Deploy string** | Dashboard / Import — bez przebudowy binarki |
 | **Exe license** | `host=`,`key=`,`api=`,`relay=` w nazwie pliku (portable) |
@@ -126,11 +139,11 @@ Support Agent to **osobny SKU** Generatora (patrz dualizm powyżej): użytkownik
 
 Nie wymaga nowego protokołu — hard setting `conn-type: incoming` (`is_incoming_only()` w [`libs/hbb_common/src/config.rs`](../libs/hbb_common/src/config.rs); blokada outbound w [`src/client.rs`](../src/client.rs); UI w [`flutter/lib/desktop/pages/desktop_home_page.dart`](../flutter/lib/desktop/pages/desktop_home_page.dart)).
 
-### Bake-in SKU
+### Embedded Support SKU
 
 1. Zbuduj desktop jak w [BUILD_DESKTOP.md](BUILD_DESKTOP.md) albo użyj release `desktop/*` z GitHub Actions.
-2. Skopiuj / podpisz przykład: [`examples/betterdesk-support-agent.example.json`](../examples/betterdesk-support-agent.example.json) → `custom.txt` obok `betterdesk.exe`.
-3. Albo **panel BetterDesk → Generator**: instalacja modułu szablonów z Releases Client, potem profil multi-platform (Windows / Linux / macOS) z `product_type: betterdesk-support`.
+2. Dla lokalnego testu ustaw podpisany payload w `BETTERDESK_SUPPORT_CONFIG_B64` i zbuduj klienta.
+3. Produkcyjna ścieżka to **panel BetterDesk → Generator** oraz workflow [`support-build.yml`](../.github/workflows/support-build.yml), który buduje sześć targetów i publikuje artefakt workflow bez `custom.txt`.
 
 Top-level (→ `HARD_SETTINGS`):
 
@@ -158,7 +171,7 @@ Jedyny workflow release: [`.github/workflows/betterdesk-desktop-release.yml`](..
 | Tag `desktop/*` | Build + prerelease pod tym tagiem |
 | `workflow_dispatch` | Ręczny build / tag |
 
-**W CI budowany jest tylko pełny BetterDesk Client** (`product_sku=betterdesk-desktop`, bez `custom.txt`, **bez** `conn-type: incoming`). **Support Agent nie ma osobnego joba** — powstaje w panelu (Generator + bake-in), nie w GitHub Actions.
+Workflow `betterdesk-desktop-release.yml` buduje tylko pełny BetterDesk Client (`product_sku=betterdesk-desktop`, bez `custom.txt`, bez `conn-type: incoming`). Osobny `support-build.yml` jest wywoływany przez panel i buduje Support z konfiguracją embedded dla sześciu targetów; nie publikuje go jako stałego release z cudzym adresem serwera.
 
 Zakres platform: **Windows / Linux / macOS** (x86_64 + aarch64). Brak jobów Android, iOS, AppImage, Flatpak, Sciter, DRM, web, F-Droid, nightly/tag upstream.
 
@@ -176,7 +189,7 @@ Manifest generatora wymaga kompletu Windows/Linux/macOS x86_64+aarch64, binarió
 
 ### Baseline bezpieczeństwa floty
 
-- Produkcja: **signed** `custom.txt` (Phase B), nie plain JSON; seed tylko na konsoli (`BETTERDESK_CUSTOM_CLIENT_SIGNING_SEED`).
+- Produkcja embedded: podpisany payload wkompilowany do binarium; seed tylko na konsoli (`BETTERDESK_CUSTOM_CLIENT_SIGNING_SEED`).
 - Release klienta odrzuca unsigned plain JSON; plain JSON pozostaje dostępny wyłącznie dla buildów debug.
 - Serwery w `override-settings` + `hide-server-settings` / `disable-settings`.
 - Preferuj HTTPS dla `api-server` gdy panel to umożliwia; `/api/branding` jest publicznym GET (kosmetyka — zaufanie = Twój API).
@@ -186,7 +199,7 @@ Manifest generatora wymaga kompletu Windows/Linux/macOS x86_64+aarch64, binarió
 
 ### vs legacy CDAP Support Agent
 
-Dawny Go/Wails Support Agent w monorepo BetterDesk został usunięty. Oficjalna ścieżka to **BetterDesk-Client** + `custom.txt` + Generator w panelu (`product_type: betterdesk-support`).
+Dawny Go/Wails Support Agent w monorepo BetterDesk został usunięty. Oficjalna ścieżka to **BetterDesk-Client** + embedded Support workflow + Generator w panelu (`product_type: betterdesk-support`).
 
 ## Pliki kluczowe
 

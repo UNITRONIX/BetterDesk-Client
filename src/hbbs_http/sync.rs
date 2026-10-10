@@ -265,6 +265,7 @@ async fn start_hbbs_sync_async() {
                     || last_telemetry_sent
                         .map(|sent| sent.elapsed() >= telemetry_interval(&id))
                         .unwrap_or(true);
+                let secure_command_poll = config::is_remote_connection_mode_controlled();
                 if telemetry_due {
                     v["telemetry_schema"] = json!(1);
                     let mut telemetry_payload = telemetry::heartbeat();
@@ -277,7 +278,8 @@ async fn start_hbbs_sync_async() {
                 }
                 let mut request = v.clone();
                 let telemetry_base = url.trim_end_matches("/api/heartbeat");
-                if telemetry_due {
+                let use_secure_request = telemetry_due || secure_command_poll;
+                if use_secure_request {
                     match crate::hbbs_http::betterdesk::fetch_telemetry_server_key().await {
                         Ok((key_id, public_key)) => {
                             match telemetry::seal_payload(&v, &key_id, &public_key, &id) {
@@ -317,9 +319,11 @@ async fn start_hbbs_sync_async() {
                 }
                 if let Ok(s) = crate::post_request(url.clone(), request.to_string(), "").await {
                     if let Ok(mut rsp) = serde_json::from_str::<HashMap::<String, Value>>(&s) {
+                        let mut secure_response = false;
                         if let Some(envelope) = rsp.remove("betterdesk_envelope") {
                             match telemetry::open_response(&envelope) {
                                 Ok(response) => {
+                                    secure_response = true;
                                     if let Some(object) = response.as_object() {
                                         rsp.extend(object.clone());
                                     }
@@ -348,6 +352,30 @@ async fn start_hbbs_sync_async() {
                             if let Ok(strategy) = serde_json::from_value::<StrategyOptions>(strategy) {
                                 log::info!("strategy updated");
                                 handle_config_options(strategy.config_options);
+                            }
+                        }
+                        if let Some(command) = rsp.remove("connection_mode_command") {
+                            if secure_response && telemetry_base.starts_with("https://") {
+                                let result =
+                                    telemetry::process_connection_mode_command(&command);
+                                let status = result
+                                    .get("status")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("rejected");
+                                if matches!(status, "applied" | "already_applied") {
+                                    log::info!(
+                                        "connection mode command {}: {}",
+                                        result
+                                            .get("command_id")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or(""),
+                                        status
+                                    );
+                                }
+                            } else {
+                                log::warn!(
+                                    "Ignoring connection mode command without HTTPS-protected envelope"
+                                );
                             }
                         }
                         if let Some(commands) = rsp.remove("telemetry_commands") {
@@ -380,6 +408,9 @@ fn strategy_option_locked(key: &str) -> bool {
     if crate::ui_interface::is_option_fixed(key) {
         return true;
     }
+    if matches!(key, "conn-type" | "remote-connection-mode") {
+        return true;
+    }
     // Support Agent: never accept server/network flips that would leave incoming-only fleet.
     if config::is_incoming_only() {
         matches!(
@@ -388,7 +419,6 @@ fn strategy_option_locked(key: &str) -> bool {
                 | keys::OPTION_RELAY_SERVER
                 | keys::OPTION_API_SERVER
                 | keys::OPTION_KEY
-                | "conn-type"
                 | "disable-settings"
                 | "hide-server-settings"
                 | "hide-help-cards"

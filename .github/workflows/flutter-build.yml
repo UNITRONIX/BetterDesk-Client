@@ -12,6 +12,18 @@ on:
       upload-tag:
         type: string
         default: "nightly"
+      support-config-b64:
+        description: "Signed embedded Support config; empty for the full Client"
+        type: string
+        default: ""
+      generic-support:
+        description: "Build a generic incoming-only Support Agent without server configuration"
+        type: boolean
+        default: false
+      source-ref:
+        description: "Exact source commit for an embedded Support build"
+        type: string
+        default: ""
 
 env:
   # Keep 1.75 on desktop Flutter/Windows (ABI / historical constraints from upstream).
@@ -29,6 +41,8 @@ env:
   VERSION: "1.5.0"
   MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
   UPLOAD_ARTIFACT: "${{ inputs.upload-artifact }}"
+  BETTERDESK_SUPPORT_CONFIG_B64: "${{ inputs.support-config-b64 }}"
+  BETTERDESK_GENERIC_SUPPORT: "${{ inputs.generic-support && '1' || '' }}"
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}-2"
 
 jobs:
@@ -95,6 +109,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ inputs.source-ref || github.sha }}
           submodules: recursive
 
       - name: Validate desktop packaging contract
@@ -461,6 +476,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ inputs.source-ref || github.sha }}
           submodules: recursive
 
       - name: Import the codesign cert
@@ -694,6 +710,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ inputs.source-ref || github.sha }}
           submodules: recursive
 
       - name: Set Swap Space

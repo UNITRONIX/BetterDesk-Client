@@ -38,6 +38,8 @@ pub type Children = Arc<Mutex<(bool, HashMap<(String, String), Child>)>>;
 pub struct UiStatus {
     pub status_num: i32,
     pub status_reason: String,
+    pub connection_mode: String,
+    pub connection_mode_revision: u64,
     #[cfg(not(feature = "flutter"))]
     pub key_confirmed: bool,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -59,6 +61,8 @@ lazy_static::lazy_static! {
     static ref UI_STATUS : Arc<Mutex<UiStatus>> = Arc::new(Mutex::new(UiStatus{
         status_num: 0,
         status_reason: "connecting".to_owned(),
+        connection_mode: config::connection_mode().to_owned(),
+        connection_mode_revision: LocalConfig::get_connection_mode_revision(),
         #[cfg(not(feature = "flutter"))]
         key_confirmed: false,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1451,7 +1455,22 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
                                     }
                                 } else if name == "temporary-password" {
                                     *TEMPORARY_PASSWD.lock().unwrap() = value;
+                                } else if name == "connection-mode" {
+                                    let mut status = UI_STATUS.lock().unwrap();
+                                    status.connection_mode = value;
+                                    status.connection_mode_revision =
+                                        LocalConfig::get_connection_mode_revision();
                                 }
+                            }
+                            Ok(Some(ipc::Data::ConnectionModeChanged(Some(mode)))) => {
+                                if mode == "incoming-only" {
+                                    #[cfg(feature = "flutter")]
+                                    crate::flutter::sessions::close_outgoing_sessions();
+                                }
+                                let mut status = UI_STATUS.lock().unwrap();
+                                status.connection_mode = mode;
+                                status.connection_mode_revision =
+                                    LocalConfig::get_connection_mode_revision();
                             }
                             #[cfg(feature = "flutter")]
                             Ok(Some(ipc::Data::VideoConnCount(Some(n)))) => {
@@ -1471,6 +1490,9 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
                                 *UI_STATUS.lock().unwrap() = UiStatus {
                                     status_num: x as _,
                                     status_reason,
+                                    connection_mode: config::connection_mode().to_owned(),
+                                    connection_mode_revision:
+                                        LocalConfig::get_connection_mode_revision(),
                                     #[cfg(not(feature = "flutter"))]
                                     key_confirmed: _c,
                                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1505,6 +1527,7 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
                         c.send(&ipc::Data::Options(None)).await.ok();
                         c.send(&ipc::Data::Config(("id".to_owned(), None))).await.ok();
                         c.send(&ipc::Data::Config(("temporary-password".to_owned(), None))).await.ok();
+                        c.send(&ipc::Data::ConnectionModeChanged(None)).await.ok();
                         #[cfg(feature = "flutter")]
                         c.send(&ipc::Data::VideoConnCount(None)).await.ok();
                         c.send(&ipc::Data::ControlPermissionsRemoteModify(None)).await.ok();
@@ -1524,6 +1547,8 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
         *UI_STATUS.lock().unwrap() = UiStatus {
             status_num: -1,
             status_reason: "ipc_disconnected".to_owned(),
+            connection_mode: config::connection_mode().to_owned(),
+            connection_mode_revision: LocalConfig::get_connection_mode_revision(),
             #[cfg(not(feature = "flutter"))]
             key_confirmed,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
