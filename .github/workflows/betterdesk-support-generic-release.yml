@@ -42,6 +42,12 @@ jobs:
       contents: read
       actions: read
     steps:
+      - name: Checkout packaging scripts
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          fetch-depth: 1
+
       - name: Download Windows x64
         uses: actions/download-artifact@v4
         with:

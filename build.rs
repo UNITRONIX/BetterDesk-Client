@@ -85,13 +85,7 @@ fn validate_embedded_support_config() {
     };
     let value = value.trim();
     if value.is_empty() {
-        if std::env::var("BETTERDESK_GENERIC_SUPPORT")
-            .map(|flag| matches!(flag.trim(), "1" | "true" | "yes"))
-            .unwrap_or(false)
-        {
-            return;
-        }
-        panic!("BETTERDESK_SUPPORT_CONFIG_B64 must not be empty when provided");
+        return;
     }
     if value.len() < 128
         || value.len() % 4 != 0
