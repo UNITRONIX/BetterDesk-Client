@@ -1021,11 +1021,98 @@ pub fn check_software_update() {
     *SOFTWARE_UPDATE_URL.lock().unwrap() = "".to_string();
 }
 
+/// Validate a GitHub HTTPS release-tag URL used by signed update metadata (#15914).
+/// BetterDesk keeps auto-check disabled; helpers remain for verified offline/manual update paths.
+pub(crate) fn release_id_from_update_url(update_url: &str) -> ResultType<String> {
+    let url = url::Url::parse(update_url)?;
+    if url.scheme() != "https" || url.host_str() != Some("github.com") {
+        bail!(
+            "Update URL is not a GitHub HTTPS release URL: {}",
+            update_url
+        );
+    }
+    if url_has_explicit_port(update_url)
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        bail!(
+            "Update URL must not contain credentials or an explicit port: {}",
+            update_url
+        );
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        bail!(
+            "Update URL must not contain query or fragment: {}",
+            update_url
+        );
+    }
+
+    let Some(segments) = url.path_segments() else {
+        bail!("Update URL has no path: {}", update_url);
+    };
+    let segments = segments.collect::<Vec<_>>();
+    let release_id = match segments.as_slice() {
+        ["rustdesk", "rustdesk", "releases", "tag", release_id] => *release_id,
+        ["rustdesk", "rustdesk", "releases", "tag", release_id, ""] => *release_id,
+        ["UNITRONIX", "BetterDesk-Client", "releases", "tag", release_id] => *release_id,
+        ["UNITRONIX", "BetterDesk-Client", "releases", "tag", release_id, ""] => *release_id,
+        _ => bail!(
+            "Update URL is not a known release tag URL: {}",
+            update_url
+        ),
+    };
+    if release_id.is_empty()
+        || release_id == "."
+        || release_id == ".."
+        || release_id.contains([' ', '/', '\\', '?', '#'])
+        || release_id.contains('%')
+    {
+        bail!("Update URL has no release id: {}", update_url);
+    }
+    Ok(release_id.to_owned())
+}
+
+pub(crate) fn url_has_explicit_port(raw_url: &str) -> bool {
+    let Some((_, rest)) = raw_url.split_once("://") else {
+        return false;
+    };
+    let authority = rest
+        .split(|c| matches!(c, '/' | '?' | '#'))
+        .next()
+        .unwrap_or_default();
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    host_port.rsplit_once(':').is_some()
+}
+
+pub(crate) fn display_version_from_release_id(release_id: &str) -> ResultType<String> {
+    let display_version = release_id.strip_prefix('v').unwrap_or(release_id);
+    let segments = display_version.split('.').collect::<Vec<_>>();
+    if segments.len() != 3
+        || segments.iter().any(|segment| {
+            segment.is_empty()
+                || !segment.chars().all(|c| c.is_ascii_digit())
+                || segment.parse::<u16>().is_err()
+        })
+    {
+        bail!("Release id is not a stable display version: {}", release_id);
+    }
+    if hbb_common::get_version_number(display_version) <= 0 {
+        bail!("Release id has invalid display version: {}", release_id);
+    }
+    Ok(display_version.to_owned())
+}
+
+fn clear_software_update_url() {
+    let mut update_url = SOFTWARE_UPDATE_URL.lock().unwrap();
+    *update_url = String::new();
+}
+
 // Official BetterDesk builds do not call rustdesk.com for updates.
 #[tokio::main(flavor = "current_thread")]
 pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
-    // BetterDesk: temporarily disable client update checks.
     *SOFTWARE_UPDATE_URL.lock().unwrap() = "".to_string();
+    let _ = clear_software_update_url;
     Ok(())
 }
 
@@ -3001,6 +3088,49 @@ mod tests {
         time::{interval, interval_at, sleep, Duration, Instant, Interval},
     };
     use std::collections::HashSet;
+
+    #[test]
+    fn parses_stable_rustdesk_release_url() {
+        let update_url = "https://github.com/rustdesk/rustdesk/releases/tag/v1.4.6";
+
+        assert_eq!(release_id_from_update_url(update_url).unwrap(), "v1.4.6");
+        assert_eq!(display_version_from_release_id("v1.4.6").unwrap(), "1.4.6");
+        assert_eq!(
+            release_id_from_update_url(&format!("{update_url}/")).unwrap(),
+            "v1.4.6"
+        );
+        assert_eq!(
+            release_id_from_update_url(
+                "https://github.com/UNITRONIX/BetterDesk-Client/releases/tag/v1.4.6"
+            )
+            .unwrap(),
+            "v1.4.6"
+        );
+    }
+
+    #[test]
+    fn rejects_untrusted_release_urls_and_unstable_versions() {
+        for update_url in [
+            "http://github.com/rustdesk/rustdesk/releases/tag/v1.4.6",
+            "https://github.com:8443/rustdesk/rustdesk/releases/tag/v1.4.6",
+            "https://github.com:443/rustdesk/rustdesk/releases/tag/v1.4.6",
+            "https://user@github.com/rustdesk/rustdesk/releases/tag/v1.4.6",
+            "https://example.com/rustdesk/rustdesk/releases/tag/v1.4.6",
+            "https://github.com/other/rustdesk/releases/tag/v1.4.6",
+            "https://github.com/rustdesk/other/releases/tag/v1.4.6",
+            "https://github.com/rustdesk/rustdesk/releases/download/v1.4.6/rustdesk.exe",
+            "https://github.com/rustdesk/rustdesk/releases/tag/v1.4.6?x=1",
+            "https://github.com/rustdesk/rustdesk/releases/tag/v1.4.6#asset",
+            "https://github.com/rustdesk/rustdesk/releases/tag/v1.4.6/extra",
+            "https://github.com/rustdesk/rustdesk/releases/tag/v1%2F4%2F6",
+            "https://github.com/rustdesk/rustdesk/releases/tag/%2e%2e",
+        ] {
+            assert!(release_id_from_update_url(update_url).is_err());
+        }
+        for release_id in ["v1.4.6-rc1", "nightly", "v9223372036854775807.1.1"] {
+            assert!(display_version_from_release_id(release_id).is_err());
+        }
+    }
 
     #[inline]
     fn get_timestamp_secs() -> u128 {
