@@ -48,6 +48,15 @@ jobs:
           ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 1
 
+      - name: Assert packaging scripts present
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f scripts/sign_release_manifest.py ]]; then
+            echo "::error::scripts/sign_release_manifest.py missing after checkout — packaging job cannot sign the release manifest"
+            exit 1
+          fi
+
       - name: Download Windows x64
         uses: actions/download-artifact@v4
         with:
