@@ -1,13 +1,11 @@
-# BetterDesk Client (full / clean desktop) — build + development prerelease.
+# BetterDesk Client (full / clean desktop) — build + GitHub Release.
 #
 # Builds the official BetterDesk desktop client after each update on master
-# (and on desktop/* tags / manual dispatch). Publishes a small prerelease with
-# changelog notes about recent development.
+# (and on desktop/* tags / manual dispatch). Publishes installers with a
+# RustDesk-style download table in the release notes.
 #
-# Out of scope (intentionally NOT built here):
-#   - BetterDesk Support Agent (product_sku=betterdesk-support / incoming-only).
-#     Support is produced later by the console Generator from clean templates
-#     + custom.txt — never as a separate GitHub Actions bake-in job.
+# Incoming-only Support Agent packages are a separate workflow:
+#   betterdesk-support-generic-release.yml (tags support-v*).
 #
 name: BetterDesk desktop release
 
@@ -307,7 +305,7 @@ jobs:
               "version": version,
               "note": (
                   "Official BetterDesk Client (full). No custom.txt / no Support Agent bake-in. "
-                  "Configure Settings → Network or use console Generator templates for Support."
+                  "Configure Settings → Network. Incoming-only Support Agents are separate support-v* releases."
               ),
               "assets": assets,
           }
@@ -331,22 +329,6 @@ jobs:
           fi
 
           {
-            echo "## ${RELEASE_NAME}"
-            echo
-            echo "Official **BetterDesk Client** development build (\`product_sku=betterdesk-desktop\`)."
-            echo
-            echo "- Commit: \`${GITHUB_SHA}\`"
-            echo "- Tag: \`${TAG_NAME}\`"
-            echo "- Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            echo
-            echo "### Scope"
-            echo
-            echo "- ✅ Full / clean desktop agents: Windows / Linux / macOS (x86_64 + aarch64 when available)"
-            echo "- ✅ Installers (MSI / EXE / DEB / RPM / DMG) and portable archives — **no** incoming-only bake-in"
-            echo "- ✅ Generator templates (clean binaries for the console — no \`custom.txt\`)"
-            echo "- ❌ BetterDesk Support Agent is **not** built in GitHub Actions (panel Generator + \`custom.txt\` only)"
-            echo "- ❌ No Android / iOS / AppImage / Flatpak / Sciter / web CI jobs"
-            echo
             echo "### Development changes"
             echo
             if git rev-parse --verify "${PREV}" >/dev/null 2>&1 || git cat-file -e "${PREV}^{commit}" 2>/dev/null; then
@@ -359,15 +341,36 @@ jobs:
             echo
             echo "### Notes"
             echo
-            echo "- Unsigned CI artifacts (prerelease)."
+            echo "- Windows: portable **EXE** and installed **MSI** for x86_64 and ARM64."
             echo "- Configure servers in Settings → Network, or import a deploy string from the BetterDesk panel."
+            echo "- Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             if [ "${IS_DEV}" = "true" ]; then
               echo "- This is a **development prerelease** published after an update on \`master\`."
             fi
-          } > release-notes.md
+          } > changelog-extra.md
+
+          # Include MSI templates + generator archives next to clean/ so the table
+          # and "Other assets" section can link them from one scan directory.
+          mkdir -p dist/notes-assets
+          cp -a dist/clean/. dist/notes-assets/
+          if [ -d dist/msi-template ]; then
+            cp -a dist/msi-template/. dist/notes-assets/ || true
+          fi
+          cp -f dist/generator-templates-*.tar.gz dist/notes-assets/ 2>/dev/null || true
+          cp -f dist/generator-templates-*.tar.gz.sha256 dist/notes-assets/ 2>/dev/null || true
+
+          python3 scripts/generate_release_download_table.py \
+            --product desktop \
+            --asset-dir dist/notes-assets \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tag "${TAG_NAME}" \
+            --release-name "${RELEASE_NAME}" \
+            --commit "${GITHUB_SHA}" \
+            --extra-md-file changelog-extra.md \
+            -o release-notes.md
 
           echo "Wrote release-notes.md"
-          head -n 40 release-notes.md
+          head -n 60 release-notes.md
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -375,7 +378,7 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           name: ${{ needs.prepare.outputs.release_name }}
           body_path: release-notes.md
-          prerelease: true
+          prerelease: ${{ needs.prepare.outputs.is_dev == 'true' }}
           make_latest: ${{ needs.prepare.outputs.is_dev != 'true' }}
           files: |
             dist/clean/*

@@ -95,6 +95,13 @@ jobs:
           path: raw/linux-aarch64
           merge-multiple: true
 
+      - name: Download Windows installers (EXE + MSI)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: betterdesk-windows-installers-*
+          path: raw/windows-installers
+          merge-multiple: true
+
       - name: Package and validate
         shell: bash
         run: |
@@ -107,6 +114,19 @@ jobs:
             test -d "$source"
             ! find "$source" \( -iname custom.txt -o -name .custom-txt-here \) -print -quit | grep -q .
             (cd "$source" && zip -qr "../../out/betterdesk-support-generic-windows-${arch}.zip" .)
+
+            # Prefer built EXE/MSI from SignOutput (same generic-support binary).
+            local exe msi
+            exe="$(find raw/windows-installers -type f -name "betterdesk-*-${arch}.exe" | head -n1 || true)"
+            msi="$(find raw/windows-installers -type f -name "betterdesk-*-${arch}.msi" | head -n1 || true)"
+            if [ -n "$exe" ]; then
+              cp "$exe" "out/betterdesk-support-generic-windows-${arch}.exe"
+            fi
+            if [ -n "$msi" ]; then
+              cp "$msi" "out/betterdesk-support-generic-windows-${arch}.msi"
+            else
+              echo "::warning::No MSI found for windows-${arch} — zip/portable only for this arch"
+            fi
           }
 
           package_macos() {
@@ -148,11 +168,19 @@ jobs:
               if item.is_file():
                   name = item.name
                   parts = name.removeprefix("betterdesk-support-generic-")
-                  match = re.match(r"^(windows|linux|macos)-([a-z0-9_]+)\.(?:zip|tar\.gz)$", parts)
+                  match = re.match(
+                      r"^(windows|linux|macos)-([a-z0-9_]+)\.(zip|tar\.gz|msi|exe)$",
+                      parts,
+                  )
                   if not match:
                       raise SystemExit(f"unexpected generic asset name: {name}")
-                  platform, arch = match.groups()
-                  fmt = "portable"
+                  platform, arch, ext = match.groups()
+                  fmt = {
+                      "zip": "portable",
+                      "tar.gz": "portable",
+                      "msi": "msi",
+                      "exe": "exe",
+                  }[ext]
                   assets.append({
                       "name": name,
                       "platform": platform,
@@ -195,6 +223,12 @@ jobs:
       contents: write
       actions: read
     steps:
+      - name: Checkout note generator
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          fetch-depth: 1
+
       - name: Download generic release bundle
         uses: actions/download-artifact@v4
         with:
@@ -211,7 +245,28 @@ jobs:
           if [[ "$tag" != support-v* ]]; then
             tag="support-v0.0.${GITHUB_RUN_NUMBER}"
           fi
+          title="BetterDesk Support Agent $tag"
+
+          {
+            echo "### Notes"
+            echo
+            echo "- Windows: portable **ZIP**, self-extracting **EXE**, and installed **MSI** when the build produced them."
+            echo "- Server URL is entered on first run (QR pairing) — nothing is baked into these artifacts."
+            echo "- Panel path: **BetterDesk Agents → Import latest release** (requires a signed \`support-v*\` release)."
+            echo "- Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > support-extra.md
+
+          python3 scripts/generate_release_download_table.py \
+            --product support \
+            --asset-dir out \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tag "${tag}" \
+            --release-name "${title}" \
+            --commit "${GITHUB_SHA}" \
+            --extra-md-file support-extra.md \
+            -o release-notes.md
+
           gh release create "$tag" out/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "BetterDesk Support Agent $tag" \
-            --notes "Generic incoming-only agents. Server configuration is completed during first run and is not embedded in these artifacts."
+            --title "$title" \
+            --notes-file release-notes.md
