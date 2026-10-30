@@ -26,7 +26,7 @@ jobs:
     env:
       BETTERDESK_SUPPORT_CONFIG_B64: ${{ inputs.config_b64 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.client_commit }}
       - name: Validate incoming-only payload
