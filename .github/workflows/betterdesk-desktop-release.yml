@@ -11,8 +11,6 @@ name: BetterDesk desktop release
 
 on:
   push:
-    branches:
-      - master
     tags:
       - "desktop/*"
     paths-ignore:
@@ -33,7 +31,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  VERSION: "1.5.0"
   # Clean full client only — never bake Support Agent custom.txt in CI.
   PRODUCT: betterdesk-desktop
   PRODUCT_SKU: betterdesk-desktop
@@ -47,6 +44,7 @@ jobs:
       release_name: ${{ steps.meta.outputs.release_name }}
       is_dev: ${{ steps.meta.outputs.is_dev }}
       previous_tag: ${{ steps.meta.outputs.previous_tag }}
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -58,7 +56,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${VERSION}"
+          VERSION="$(tr -d '\r\n' < VERSION)"
           SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
           RUN_N="${GITHUB_RUN_NUMBER}"
 
@@ -96,12 +94,14 @@ jobs:
             echo "release_name=${RELEASE_NAME}"
             echo "is_dev=${IS_DEV}"
             echo "previous_tag=${PREV}"
+            echo "version=${VERSION}"
           } >> "${GITHUB_OUTPUT}"
 
           echo "tag_name=${TAG_NAME}"
           echo "release_name=${RELEASE_NAME}"
           echo "is_dev=${IS_DEV}"
           echo "previous_tag=${PREV}"
+          echo "version=${VERSION}"
 
   build:
     needs: prepare
@@ -109,6 +109,7 @@ jobs:
     with:
       upload-artifact: true
       upload-tag: ${{ needs.prepare.outputs.tag_name }}
+      version: ${{ needs.prepare.outputs.version }}
     secrets: inherit
 
   package-clean-and-release:
@@ -117,6 +118,8 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5

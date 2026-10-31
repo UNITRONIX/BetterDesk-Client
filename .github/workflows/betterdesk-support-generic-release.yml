@@ -24,14 +24,35 @@ env:
   RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('support-{0}', github.sha) }}
 
 jobs:
+  prepare:
+    name: Read client version
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          fetch-depth: 1
+      - name: Read canonical version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '\r\n' < VERSION)"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
   build:
     name: Build generic incoming-only clients
+    needs: prepare
     uses: ./.github/workflows/flutter-build.yml
     with:
       upload-artifact: true
       upload-tag: generic-${{ github.sha }}
       source-ref: ${{ inputs.source_ref || github.sha }}
       generic-support: true
+      version: ${{ needs.prepare.outputs.version }}
     secrets: inherit
 
   package:

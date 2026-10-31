@@ -1,0 +1,58 @@
+name: Bump BetterDesk Client version
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: betterdesk-client-version-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    if: |
+      !startsWith(github.event.head_commit.message, 'chore: bump client version')
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump patch version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/bump_version.py --patch
+          VERSION="$(tr -d '\r\n' < VERSION)"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "Client version: ${VERSION}"
+
+      - name: Commit and push version bump
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION Cargo.toml flutter/pubspec.yaml
+          git commit -m "chore: bump client version to ${VERSION} [version-bump]"
+          git push origin HEAD:master
+
+      - name: Start release workflow with bumped source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          gh workflow run .github/workflows/betterdesk-desktop-release.yml \
+            --ref master \
+            -f "tag_name=desktop/${VERSION}-dev.${GITHUB_RUN_NUMBER}-${SHORT_SHA}"

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 
 ARCH_ROWS = (
@@ -26,7 +27,10 @@ PLATFORM_COLS = (
 
 
 def _url(repo: str, tag: str, name: str) -> str:
-    return f"https://github.com/{repo}/releases/download/{tag}/{name}"
+    return (
+        f"https://github.com/{repo}/releases/download/"
+        f"{quote(tag, safe='')}/{quote(name, safe='')}"
+    )
 
 
 def _link(label: str, repo: str, tag: str, name: str | None) -> str:

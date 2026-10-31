@@ -14,6 +14,7 @@ def main() -> int:
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
 
+    canonical = (root / "VERSION").read_text(encoding="utf-8").strip()
     cargo = (root / "Cargo.toml").read_text(encoding="utf-8")
     pubspec = (root / "flutter" / "pubspec.yaml").read_text(encoding="utf-8")
     cargo_version = re.search(r'^version\s*=\s*"([^"]+)"', cargo, re.MULTILINE)
@@ -23,6 +24,7 @@ def main() -> int:
 
     expected = args.version.strip()
     actual = {
+        "VERSION": canonical,
         "Cargo.toml": cargo_version.group(1),
         "flutter/pubspec.yaml": flutter_version.group(1),
     }
