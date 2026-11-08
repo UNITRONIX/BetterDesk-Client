@@ -113,6 +113,65 @@ jobs:
             local source="raw/windows-${arch}"
             test -d "$source"
             ! find "$source" \( -iname custom.txt -o -name .custom-txt-here \) -print -quit | grep -q .
+
+            # Ship an installer that delegates to the binary's own
+            # --install-service path. Earlier packages referenced a script that
+            # looked up a "betterdesk" service name which never existed (#439).
+            cat > "$source/Install-BetterDesk.ps1" <<'PS1'
+          #Requires -RunAsAdministrator
+          <#
+            Register the BetterDesk Support Agent as a Windows service.
+
+            The client binary owns service registration (--install-service), so
+            this script only locates it, runs it elevated and reports the real
+            service name back. Do not duplicate the service logic here.
+          #>
+          param(
+              [string]$ExePath = "",
+              [switch]$Uninstall
+          )
+
+          $ErrorActionPreference = "Stop"
+
+          if (-not $ExePath) {
+              $candidate = Get-ChildItem -Path $PSScriptRoot -Filter "betterdesk-support*.exe" -File -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+              if (-not $candidate) {
+                  $candidate = Get-ChildItem -Path $PSScriptRoot -Filter "*.exe" -File -ErrorAction SilentlyContinue |
+                      Where-Object { $_.Name -notlike "*Setup*" } |
+                      Select-Object -First 1
+              }
+              if (-not $candidate) {
+                  throw "No BetterDesk executable found in $PSScriptRoot. Pass -ExePath explicitly."
+              }
+              $ExePath = $candidate.FullName
+          }
+
+          if (-not (Test-Path $ExePath)) {
+              throw "Executable not found: $ExePath"
+          }
+
+          if ($Uninstall) {
+              Write-Host "Uninstalling BetterDesk service from $ExePath"
+              & $ExePath --uninstall-service
+              exit $LASTEXITCODE
+          }
+
+          Write-Host "Installing BetterDesk service from $ExePath"
+          & $ExePath --install-service
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+              throw "--install-service failed with exit code $code"
+          }
+
+          $service = Get-Service -Name "BetterDesk-Client" -ErrorAction SilentlyContinue
+          if ($service) {
+              Write-Host "Service '$($service.Name)' is $($service.Status)."
+          } else {
+              Write-Host "Install completed. Check 'Get-Service | Where-Object DisplayName -like *BetterDesk*' for the registered name."
+          }
+          PS1
+
             (cd "$source" && zip -qr "../../out/betterdesk-support-generic-windows-${arch}.zip" .)
 
             # Prefer built EXE/MSI from SignOutput (same generic-support binary).
