@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
 
@@ -36,24 +37,33 @@ def _link(label: str, repo: str, tag: str, name: str | None) -> str:
 
 
 def _classify_desktop(name: str) -> tuple[str, str, str] | None:
-    """Return (platform, arch, kind) for full desktop assets."""
+    """Return (platform, arch, kind) for full desktop assets.
+
+    Only real installers may match. `betterdesk-template-<arch>.msi` is the patcher
+    template that ships for the console Generator: it contains placeholder files and no
+    application, so linking it as "MSI" gave users a download that cannot install. It
+    matched the generic `<name>-<arch>.msi` pattern because "template" looked like a
+    version segment.
+    """
+    if name.startswith("betterdesk-template") or "template" in name:
+        return None
     # betterdesk-1.5.0-x86_64.exe / .msi
-    m = re.match(r"^betterdesk-[^-]+-(x86_64|aarch64)\.(exe|msi)$", name)
+    m = re.match(r"^betterdesk-(\d[^-]*)-(x86_64|aarch64)\.(exe|msi)$", name)
     if m:
-        return "windows", m.group(1), m.group(2)
+        return "windows", m.group(2), m.group(3)
     # betterdesk-1.5.0-windows-x86_64.tar.gz
-    m = re.match(r"^betterdesk-[^-]+-windows-(x86_64|aarch64)\.tar\.gz$", name)
+    m = re.match(r"^betterdesk-(\d[^-]*)-windows-(x86_64|aarch64)\.tar\.gz$", name)
     if m:
-        return "windows", m.group(1), "portable"
+        return "windows", m.group(2), "portable"
     # betterdesk-1.5.0-linux-x86_64.deb / .rpm / -suse.rpm / -portable.tar.gz
     m = re.match(
-        r"^betterdesk-[^-]+-linux-(x86_64|aarch64)(?:-(suse))?(\.deb|\.rpm|-portable\.tar\.gz)$",
+        r"^betterdesk-(\d[^-]*)-linux-(x86_64|aarch64)(?:-(suse))?(\.deb|\.rpm|-portable\.tar\.gz)$",
         name,
     )
     if m:
-        arch = m.group(1)
-        suse = m.group(2)
-        ext = m.group(3)
+        arch = m.group(2)
+        suse = m.group(3)
+        ext = m.group(4)
         if ext == ".deb":
             return "linux", arch, "deb"
         if ext == ".rpm" and suse:
@@ -63,10 +73,10 @@ def _classify_desktop(name: str) -> tuple[str, str, str] | None:
         if ext == "-portable.tar.gz":
             return "linux", arch, "portable"
     # betterdesk-1.5.0-macos-x86_64.dmg / .tar.gz
-    m = re.match(r"^betterdesk-[^-]+-macos-(x86_64|aarch64)\.(dmg|tar\.gz)$", name)
+    m = re.match(r"^betterdesk-(\d[^-]*)-macos-(x86_64|aarch64)\.(dmg|tar\.gz)$", name)
     if m:
-        kind = "dmg" if m.group(2) == "dmg" else "portable"
-        return "macos", m.group(1), kind
+        kind = "dmg" if m.group(3) == "dmg" else "portable"
+        return "macos", m.group(2), kind
     return None
 
 
@@ -98,7 +108,18 @@ def index_assets(asset_dir: Path, product: str) -> dict[tuple[str, str, str], st
         if not hit:
             continue
         platform, arch, kind = hit
-        out[(platform, arch, kind)] = path.name
+        key = (platform, arch, kind)
+        existing = out.get(key)
+        if existing is not None:
+            # Two assets claiming the same cell used to be resolved by iteration order, so
+            # the released table could link either one depending on sort. Report it instead.
+            print(
+                f"error: {existing} and {path.name} both claim "
+                f"{platform}/{arch}/{kind}; refusing to guess which one to link",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        out[key] = path.name
     return out
 
 
@@ -201,14 +222,20 @@ def render_notes(
 
     parts.append(render_table(product=product, assets=assets, repo=repo, tag=tag))
 
-    # Other useful assets (templates, manifests) as a short list
+    # Other useful assets (templates, manifests) as a short list.
+    #
+    # Only files present in the staged directory are listed. An earlier version linked
+    # `generator-templates-*.tar.gz.sha256` unconditionally, but the publish step does not
+    # attach that file, so the link 404'd in every release.
     other = []
     for path in sorted(asset_dir.iterdir()):
         if not path.is_file():
             continue
         name = path.name
         if product == "desktop":
-            if name.startswith("generator-templates") or name.endswith("generator-manifest.json"):
+            if name.startswith("generator-templates") and name.endswith(".tar.gz"):
+                other.append(f"- [{name}]({_url(repo, tag, name)}) — clean Generator templates")
+            elif name.endswith("generator-manifest.json"):
                 other.append(f"- [{name}]({_url(repo, tag, name)}) — clean Generator templates")
             elif name == "betterdesk-desktop-manifest.json":
                 other.append(f"- [{name}]({_url(repo, tag, name)}) — desktop release manifest")

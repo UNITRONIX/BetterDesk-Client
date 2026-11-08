@@ -85,6 +85,7 @@ totp-rs = { version = "5.4", default-features = false, features = ["gen_secret",
 stunclient = "0.4"
 kcp-sys= { git = "https://github.com/rustdesk-org/kcp-sys"}
 reqwest = { version = "0.12", features = ["blocking", "socks", "json", "native-tls", "rustls-tls", "rustls-tls-native-roots", "gzip", "zstd"], default-features=false }
+keyring = { version = "3", default-features = false }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 # https://github.com/rustdesk/rustdesk/discussions/10197, not use cpal on linux
@@ -107,6 +108,10 @@ system_shutdown = "4.0"
 qrcode-generator = "4.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# OS credential store for secrets (device/access tokens). Backend is per platform:
+# Credential Manager / Keychain / Secret Service. Secret Service may be absent at runtime
+# (headless Linux), so `secure_store` falls back to an encrypted file rather than failing.
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 winapi = { version = "0.3", features = [
     "winuser",
     "wincrypt",
@@ -151,6 +156,7 @@ shared_memory = "0.12"
 tauri-winrt-notification = "0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
 objc = "0.2"
 cocoa = "0.24"
 dispatch = "0.2"
@@ -181,6 +187,9 @@ bytemuck = "1.23"
 ttf-parser = "0.25"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# linux-native uses the kernel keyutils store, not D-Bus: `secret-service` v4 pulls zbus 4
+# while `keepawake` pins zbus 3, and Cargo cannot resolve both zvariant_utils lines.
+keyring = { version = "3", default-features = false, features = ["linux-native"] }
 libxdo-sys = "0.11"
 psimple = { package = "libpulse-simple-binding", version = "2.27" }
 pulse = { package = "libpulse-binding", version = "2.27" }
