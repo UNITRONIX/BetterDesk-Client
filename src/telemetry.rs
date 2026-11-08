@@ -218,7 +218,7 @@ pub fn seal_payload(
         Ok(value) => value,
         Err(_) => 0,
     };
-    let sequence = current_sequence.saturating_add(1);
+    let sequence = next_telemetry_sequence(current_sequence);
     LocalConfig::set_option(TELEMETRY_SEQUENCE.to_owned(), sequence.to_string());
 
     let ephemeral_public = STANDARD.encode(ephemeral_public.0);
@@ -247,6 +247,62 @@ pub fn seal_payload(
         "ciphertext": ciphertext_value,
         "signature": STANDARD.encode(signature.as_ref()),
     }))
+}
+
+/// Durable copy of the telemetry sequence counter.
+///
+/// `LocalConfig` lives in the per-user config directory, so the service and the
+/// interactive app keep separate counters. The server rejects any envelope whose
+/// sequence is not strictly greater than the last one it accepted for that
+/// device, so a counter that restarts at 0 leaves the device locked out until
+/// the server-side state is cleared (#484).
+///
+/// Keeping a floor based on wall-clock milliseconds makes the counter monotonic
+/// across restarts and across config scopes: even if the stored value is lost,
+/// the floor is far above the old counter but still below the server's clock
+/// skew tolerance. This does not weaken replay protection - the server still
+/// rejects any envelope at or below the last accepted sequence.
+const TELEMETRY_SEQUENCE_FLOOR_MS: u64 = 1_700_000_000_000;
+
+fn durable_sequence_path() -> PathBuf {
+    // Deliberately the app-level directory (not the per-user one) so the
+    // service process and the tray app observe the same counter.
+    let mut path = Config::path("");
+    path.push(format!("{}.telemetry-seq", config::APP_NAME.read().unwrap()));
+    path
+}
+
+fn read_durable_sequence() -> u64 {
+    fs::read_to_string(durable_sequence_path())
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
+fn write_durable_sequence(sequence: u64) {
+    let path = durable_sequence_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Err(err) = fs::write(&path, sequence.to_string()) {
+        log::debug!("telemetry sequence mirror not writable: {err}");
+    }
+}
+
+fn next_telemetry_sequence(current: u64) -> u64 {
+    let durable = read_durable_sequence();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0);
+    // Never go backwards: take the highest of the stored counters and the
+    // wall-clock floor, then increment.
+    let base = current
+        .max(durable)
+        .max(now_ms.saturating_sub(TELEMETRY_SEQUENCE_FLOOR_MS));
+    let sequence = base.saturating_add(1);
+    write_durable_sequence(sequence);
+    sequence
 }
 
 fn response_keypair() -> Result<(box_::PublicKey, box_::SecretKey), String> {
@@ -1002,6 +1058,53 @@ pub fn process_commands(commands: &[Value]) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #484: a restarted client must never restart its envelope counter at 0,
+    /// otherwise the server rejects every envelope as a replay until its
+    /// per-device state is cleared by hand.
+    #[test]
+    fn telemetry_sequence_never_restarts_at_zero() {
+        // A stored value of 0 models a fresh or wiped per-user config, which is
+        // what happens when the service runs under a different account.
+        let first = next_telemetry_sequence(0);
+        assert!(
+            first > 0,
+            "sequence must not restart at 0 after a config reset"
+        );
+
+        // Successive calls are strictly increasing even when the caller still
+        // reads the stale per-user counter.
+        let second = next_telemetry_sequence(0);
+        assert!(second > first, "sequence must be strictly increasing");
+
+        // An already higher stored value is respected rather than truncated.
+        let high = first + 10_000;
+        let after_high = next_telemetry_sequence(high);
+        assert!(after_high > high, "stored high-water mark must be honoured");
+    }
+
+    #[test]
+    fn telemetry_sequence_floor_dominates_stale_small_counters() {
+        // A counter left at a small value (the previous buggy behaviour) must be
+        // lifted well above it so the server keeps accepting envelopes.
+        let stale = 6u64;
+        let lifted = next_telemetry_sequence(stale);
+        assert!(
+            lifted > stale.saturating_add(1_000_000),
+            "stale small counter must be lifted above the wall-clock floor, got {lifted}"
+        );
+
+        // And the floor itself must stay well clear of a small counter, which is
+        // what makes the recovery work without server-side cleanup.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or(0);
+        assert!(
+            now_ms.saturating_sub(TELEMETRY_SEQUENCE_FLOOR_MS) > stale.saturating_add(1_000_000),
+            "floor must be far above a stale counter"
+        );
+    }
 
     #[test]
     fn heartbeat_has_bounded_contract_fields() {
