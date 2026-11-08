@@ -1,0 +1,36 @@
+# cargo-audit configuration for BetterDesk Client.
+#
+# Every ignored advisory is documented with its blocking reason in
+# docs/SECURITY-BACKLOG.md. Removing an entry from that list without removing it
+# here (or vice versa) is a review finding.
+#
+# Do NOT add an entry here to silence a newly reported advisory. Fix it, or
+# record why it cannot be fixed yet.
+
+[advisories]
+ignore = [
+    # ---- Rust toolchain pinned to 1.75 (see docs/SECURITY-BACKLOG.md) ----
+    # quinn-proto: fixed in 0.11.17, which needs crate manifests using
+    # edition2024; Cargo 1.75 cannot parse them.
+    "RUSTSEC-2026-0338",
+    "RUSTSEC-2026-0339",
+    "RUSTSEC-2026-0340",
+    "RUSTSEC-2026-0341",
+    "RUSTSEC-2026-0342",
+    # time 0.1: pulled in by a legacy transitive dependency; fix needs 0.3 and
+    # a parent crate change.
+    "RUSTSEC-2020-0071",
+    "RUSTSEC-2026-0009",
+    # libgit2-sys: build-only dependency, not linked into the shipped binary.
+    "RUSTSEC-2024-0013",
+    # ---- Need semver-major upgrades with their own PR ----
+    "RUSTSEC-2026-0194", # quick-xml 0.30 -> 0.41 (breaking API)
+    "RUSTSEC-2026-0195", # quick-xml 0.30 -> 0.41 (breaking API)
+    "RUSTSEC-2026-0387", # crypto-bigint 0.5 -> 0.7 (crypto stack)
+    "RUSTSEC-2024-0421", # idna 0.5 -> 1.0 (URL handling)
+    "RUSTSEC-2026-0293", # ringbuf 0.3 -> 0.5 (audio pipeline)
+    "RUSTSEC-2025-0040", # users: no patched release published
+]
+
+[output]
+quiet = false

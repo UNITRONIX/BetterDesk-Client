@@ -1,0 +1,140 @@
+# =============================================================================
+# BetterDesk Client - dependency, formatting and test gates
+# =============================================================================
+# The main BetterDesk repo retired its cargo-audit workflow and asserts that
+# client audits run here. Before this workflow existed there was no automated
+# gate at all, which is how 39 RUSTSEC advisories accumulated unnoticed.
+#
+# Blocking vs advisory:
+#   - cargo audit on the dependency graph  : blocking (new advisories must not
+#     land silently; the current backlog is recorded in docs/SECURITY-BACKLOG.md)
+#   - cargo test                           : blocking
+#   - cargo fmt --check                    : advisory until the pre-existing
+#     formatting backlog across vendored libs is cleared
+#   - cargo clippy -D warnings             : advisory until the pre-existing
+#     lint backlog is cleared
+#
+# Keeping the last two non-blocking avoids a permanently red gate that everyone
+# learns to ignore - tighten them once the backlog is gone.
+# =============================================================================
+
+name: Client Security & Tests
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'libs/**'
+      - '.github/workflows/client-security.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'libs/**'
+      - '.github/workflows/client-security.yml'
+  schedule:
+    # Weekly drift check so a new advisory is caught between releases.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Rust pinned for Flutter/Windows ABI reasons; see flutter-build.yml.
+  RUST_VERSION: '1.75'
+
+concurrency:
+  group: client-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit dependencies
+        run: cargo audit --file Cargo.lock
+
+  fmt:
+    name: cargo fmt (advisory)
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: cargo clippy (advisory)
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libxdo-dev libgtk-3-dev libasound2-dev libpulse-dev \
+            libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxfixes-dev libxrandr-dev libxi-dev libxtst-dev \
+            libdbus-1-dev libopus-dev libvpx-dev libaom-dev \
+            libyuv-dev libssl-dev pkg-config protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy
+
+      - name: Clippy
+        run: cargo clippy --lib -- -D warnings
+
+  test:
+    name: cargo test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libxdo-dev libgtk-3-dev libasound2-dev libpulse-dev \
+            libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxfixes-dev libxrandr-dev libxi-dev libxtst-dev \
+            libdbus-1-dev libopus-dev libvpx-dev libaom-dev \
+            libyuv-dev libssl-dev pkg-config protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Run library tests
+        run: cargo test --lib
