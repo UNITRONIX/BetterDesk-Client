@@ -5,11 +5,16 @@
 //! endpoints and preferences, not live tokens.
 //!
 //! Every call degrades rather than fails: a platform without a usable store (headless
-//! Linux, restricted service account) falls back to the existing field-level encryption in
-//! `hbb_common`, which keeps the client working while the diagnostics card reports that
-//! the fallback is in use. Nothing here panics or unwraps a store error.
+//! Linux, restricted service account, mobile) falls back to the existing field-level
+//! encryption in `hbb_common`, which keeps the client working while the diagnostics card
+//! reports that the fallback is in use. Nothing here panics or unwraps a store error.
 
 use hbb_common::{config::LocalConfig, log};
+
+/// `keyring` is a desktop-only dependency: the crate is declared under the Windows, macOS
+/// and Linux target sections in `Cargo.toml`. Mobile builds therefore use the config
+/// fallback exclusively, which is why every `keyring` use below is gated rather than the
+/// whole module.
 
 const SERVICE: &str = "betterdesk-client";
 
@@ -43,16 +48,26 @@ impl StoreBackend {
     }
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn entry(name: &str) -> Option<keyring::Entry> {
     keyring::Entry::new(SERVICE, name).ok()
 }
 
 /// Read a secret. Returns `None` when absent or when no OS store is usable.
 pub fn get_secret(name: &str) -> Option<String> {
-    let entry = entry(name)?;
-    match entry.get_password() {
-        Ok(value) if !value.is_empty() => Some(value),
-        _ => None,
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    {
+        let entry = entry(name)?;
+        return match entry.get_password() {
+            Ok(value) if !value.is_empty() => Some(value),
+            _ => None,
+        };
+    }
+    // Mobile has no `keyring` dependency: the config fallback is the only store.
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = name;
+        None
     }
 }
 
@@ -70,6 +85,7 @@ pub fn set_secret(name: &str, value: &str) -> StoreBackend {
 }
 
 fn set_secret_inner(name: &str, value: &str) -> StoreBackend {
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     if let Some(entry) = entry(name) {
         if value.is_empty() {
             // Deleting a missing entry is not an error: callers clear secrets twice.
