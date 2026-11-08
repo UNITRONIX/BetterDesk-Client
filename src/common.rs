@@ -1121,6 +1121,22 @@ pub fn get_app_name() -> String {
     hbb_common::config::APP_NAME.read().unwrap().clone()
 }
 
+/// Space-free install / service identity derived from the display `APP_NAME`.
+///
+/// Display names may contain spaces (e.g. `"BetterDesk Client"`). Privileged
+/// Windows `sc` / unquoted installer tokens and `validate_install_app_name`
+/// require `[A-Za-z0-9_-]` only, so whitespace runs become a single `-`
+/// (`"BetterDesk-Client"`). Custom `app-name` values are handled the same way.
+pub fn install_app_name_from_display(display: &str) -> String {
+    display.split_whitespace().collect::<Vec<_>>().join("-")
+}
+
+/// Install / Windows service token; not the UI display name.
+#[inline]
+pub fn get_install_app_name() -> String {
+    install_app_name_from_display(&get_app_name())
+}
+
 /// Executable / process stem (`betterdesk`), not the display name.
 #[inline]
 pub fn get_exe_name() -> String {
@@ -3088,6 +3104,20 @@ mod tests {
         time::{interval, interval_at, sleep, Duration, Instant, Interval},
     };
     use std::collections::HashSet;
+
+    #[test]
+    fn install_app_name_replaces_whitespace_with_hyphen() {
+        assert_eq!(
+            install_app_name_from_display("BetterDesk Client"),
+            "BetterDesk-Client"
+        );
+        assert_eq!(install_app_name_from_display("RustDesk"), "RustDesk");
+        assert_eq!(
+            install_app_name_from_display("  Foo   Bar  Baz "),
+            "Foo-Bar-Baz"
+        );
+        assert_eq!(install_app_name_from_display(""), "");
+    }
 
     #[test]
     fn parses_stable_rustdesk_release_url() {

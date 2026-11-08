@@ -249,6 +249,7 @@ mod tests {
             "1RustDesk",
             "_RustDesk",
             "Rust_Desk",
+            "BetterDesk-Client",
         ] {
             assert!(validate_install_app_name(app_name).is_ok(), "{app_name}");
         }

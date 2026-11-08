@@ -1005,7 +1005,8 @@ fn update_me_from_app_dir(app_dir: String) -> ResultType<()> {
 
 fn update_me_from_source(update_source: UpdateSource) -> ResultType<()> {
     let app_name = crate::get_app_name();
-    validate_install_app_name(&app_name)?;
+    // Display APP_NAME may contain spaces; validate the space-free install token.
+    validate_install_app_name(&crate::get_install_app_name())?;
     let is_installed_daemon = is_installed_daemon(false);
     let option_stop_service = "stop-service";
     let is_service_stopped = hbb_common::config::option2bool(
@@ -1206,7 +1207,8 @@ fn verify_update_app_identity(installed: &Path, candidate: &Path) -> ResultType<
 /// Must be called from a process running as root (e.g. the service binary).
 pub fn update_from_dmg_as_root(dmg_path: &str, expected_version: &str) -> ResultType<()> {
     let app_name = crate::get_app_name();
-    validate_install_app_name(&app_name)?;
+    // Display APP_NAME may contain spaces; validate the space-free install token.
+    validate_install_app_name(&crate::get_install_app_name())?;
     let app_bundle = format!("/Applications/{}.app", app_name);
     let tmp_dir_output = std::process::Command::new("/usr/bin/mktemp")
         .args(&["-d", "/tmp/.rustdeskupdate-root-XXXXXX"])

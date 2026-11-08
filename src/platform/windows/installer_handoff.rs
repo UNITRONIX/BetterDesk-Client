@@ -142,7 +142,8 @@ fn verified_install_parameters(script: &InstallCommandScript) -> ResultType<Stri
 }
 
 pub(super) fn run_cmds(cmds: String, show: bool, tip: &str) -> ResultType<()> {
-    validate_install_app_name(&crate::get_app_name())?;
+    // Display APP_NAME may contain spaces; validate the space-free install token.
+    validate_install_app_name(&crate::get_install_app_name())?;
     let script = write_install_script(cmds)?;
     let cmd_path = get_system_executable(CMD_RELATIVE_PATH)?;
     let parameters = verified_install_parameters(&script)?;

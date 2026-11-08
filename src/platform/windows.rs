@@ -549,9 +549,10 @@ fn service_main(arguments: Vec<OsString>) {
 }
 
 pub fn start_os_service() {
-    if let Err(e) =
-        windows_service::service_dispatcher::start(crate::get_app_name(), ffi_service_main)
-    {
+    if let Err(e) = windows_service::service_dispatcher::start(
+        crate::get_install_app_name(),
+        ffi_service_main,
+    ) {
         log::error!("start_service failed: {}", e);
     }
 }
@@ -670,8 +671,9 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
         }
     };
 
-    // Register system service event handler
-    let status_handle = service_control_handler::register(crate::get_app_name(), event_handler)?;
+    // Register system service event handler (space-free install token, not display name).
+    let status_handle =
+        service_control_handler::register(crate::get_install_app_name(), event_handler)?;
 
     let next_status = ServiceStatus {
         // Should match the one from system service registry
@@ -1329,8 +1331,7 @@ fn get_valid_subkey() -> String {
 
 // Return install options other than InstallLocation.
 pub fn get_install_options() -> String {
-    let app_name = crate::get_app_name();
-    let subkey = format!(".{}", app_name.to_lowercase());
+    let subkey = format!(".{}", crate::get_install_app_name().to_lowercase());
     let mut opts = HashMap::new();
 
     let desktop_shortcuts = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_DESKTOPSHORTCUTS);
@@ -1352,8 +1353,7 @@ pub fn get_silent_install_options(printer_override: Option<bool>) -> &'static st
     let install_printer = match printer_override {
         Some(override_value) => override_value,
         None => {
-            let app_name = crate::get_app_name();
-            let subkey = format!(".{}", app_name.to_lowercase());
+            let subkey = format!(".{}", crate::get_install_app_name().to_lowercase());
             let printer = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_PRINTER);
             printer.as_deref() == Some("1")
         }
@@ -1522,7 +1522,8 @@ fn get_after_install(
     reg_value_printer: Option<String>,
 ) -> String {
     let app_name = crate::get_app_name();
-    let ext = app_name.to_lowercase();
+    // HKCR file/protocol keys cannot contain spaces; use the install token.
+    let ext = crate::get_install_app_name().to_lowercase();
     let nested_exe = escape_nested_cmd_ampersands(exe);
 
     // reg delete HKEY_CURRENT_USER\Software\Classes for
@@ -1798,7 +1799,9 @@ pub fn run_before_uninstall() -> ResultType<()> {
 
 fn get_before_uninstall(kill_self: bool) -> String {
     let app_name = crate::get_app_name();
-    let ext = app_name.to_lowercase();
+    let service_name = crate::get_install_app_name();
+    let exe_name = crate::get_exe_name();
+    let ext = service_name.to_lowercase();
     let filter = if kill_self {
         "".to_string()
     } else {
@@ -1807,10 +1810,10 @@ fn get_before_uninstall(kill_self: bool) -> String {
     format!(
         "
     chcp 65001
-    sc stop {app_name}
-    sc delete {app_name}
+    sc stop {service_name}
+    sc delete {service_name}
     taskkill /F /IM {broker_exe}
-    taskkill /F /IM {app_name}.exe{filter}
+    taskkill /F /IM {exe_name}.exe{filter}
     reg delete HKEY_CLASSES_ROOT\\.{ext} /f
     reg delete HKEY_CLASSES_ROOT\\{ext} /f
     reg delete HKEY_CLASSES_ROOT\\{uri_scheme} /f
@@ -2185,8 +2188,7 @@ pub fn update_install_option(k: &str, v: &str) -> ResultType<()> {
     if ![REG_NAME_INSTALL_PRINTER].contains(&k) || !["0", "1"].contains(&v) {
         return Ok(());
     }
-    let app_name = crate::get_app_name();
-    let ext = app_name.to_lowercase();
+    let ext = crate::get_install_app_name().to_lowercase();
     let cmds =
         format!("chcp 65001 && reg add HKEY_CLASSES_ROOT\\.{ext} /f /v {k} /t REG_SZ /d \"{v}\"");
     run_cmds(cmds, false, "update_install_option")?;
@@ -3316,7 +3318,7 @@ pub fn try_lock_tray_single_instance() -> bool {
     };
     // `Local\` is the per session namespace, so the name is scoped to this
     // session already and cannot be squatted by another user.
-    let name = wide_string(&format!("Local\\{}_tray", crate::get_app_name()));
+    let name = wide_string(&format!("Local\\{}_tray", crate::get_install_app_name()));
     unsafe {
         // A successful `CreateMutexW` doesn't clear the last error, clear it to
         // reliably detect `ERROR_ALREADY_EXISTS`.
@@ -3354,13 +3356,15 @@ pub fn uninstall_service(show_new_window: bool, _: bool) -> bool {
     let cmds = format!(
         "
     chcp 65001
-    sc stop {app_name}
-    sc delete {app_name}
+    sc stop {service_name}
+    sc delete {service_name}
     if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\" del /f /q \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\"
     taskkill /F /IM {broker_exe}
-    taskkill /F /IM {app_name}.exe{filter}
+    taskkill /F /IM {exe_name}.exe{filter}
     ",
         app_name = crate::get_app_name(),
+        service_name = crate::get_install_app_name(),
+        exe_name = crate::get_exe_name(),
         broker_exe = WIN_TOPMOST_INJECTED_PROCESS_EXE,
     );
     if let Err(err) = run_cmds(cmds, false, "uninstall") {
@@ -3374,6 +3378,7 @@ pub fn uninstall_service(show_new_window: bool, _: bool) -> bool {
 
 fn get_install_service_commands(path: &str, exe: &str) -> ResultType<String> {
     let app_name = crate::get_app_name();
+    let exe_name = crate::get_exe_name();
     for value in [path, exe] {
         validate_install_value(value)?;
     }
@@ -3393,7 +3398,7 @@ fn get_install_service_commands(path: &str, exe: &str) -> ResultType<String> {
     Ok(format!(
         "
 chcp 65001
-taskkill /F /IM {app_name}.exe{filter}
+taskkill /F /IM {exe_name}.exe{filter}
 {tray_shortcut_commands}
 copy /Y \"%RUSTDESK_OUTPUT_DIR%\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\\"
 {import_config}
@@ -3582,8 +3587,10 @@ reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
     };
 
     let filter = format!(" /FI \"PID ne {}\"", get_current_pid());
+    let service_name = crate::get_install_app_name();
+    let exe_name = crate::get_exe_name();
     let restore_service_cmd = if is_service_running {
-        format!("sc start {}", &app_name)
+        format!("sc start {}", &service_name)
     } else {
         "".to_owned()
     };
@@ -3615,8 +3622,8 @@ reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
     let cmds = format!(
         "
 chcp 65001
-sc stop {app_name}
-taskkill /F /IM {app_name}.exe{filter}
+sc stop {service_name}
+taskkill /F /IM {exe_name}.exe{filter}
 {reg_cmd}
 {copy_exe}
 {rename_exe}
@@ -3626,7 +3633,6 @@ taskkill /F /IM {app_name}.exe{filter}
 {install_printer_cmd}
 {sleep}
     ",
-        app_name = app_name,
         copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
         rename_exe = rename_exe_cmd(&src_exe, &path)?,
         remove_meta_toml = remove_meta_toml_cmd(is_msi.unwrap_or(true), &path),
@@ -3959,16 +3965,16 @@ fn get_import_config(exe: &str) -> String {
     let exe = escape_nested_cmd_ampersands(exe);
     let config_path = Config::file();
     let config_path = escape_nested_cmd_ampersands(config_path.to_str().unwrap_or(""));
+    let service_name = crate::get_install_app_name();
+    let display_name = crate::get_app_name();
     format!("
-sc stop {app_name}
-sc delete {app_name}
-sc create {app_name} binpath= \"\\\"{exe}\\\" --import-config \\\"{config_path}\\\"\" start= auto DisplayName= \"{app_name} Service\"
-sc start {app_name}
-sc stop {app_name}
-sc delete {app_name}
-",
-    app_name = crate::get_app_name(),
-)
+sc stop {service_name}
+sc delete {service_name}
+sc create {service_name} binpath= \"\\\"{exe}\\\" --import-config \\\"{config_path}\\\"\" start= auto DisplayName= \"{display_name} Service\"
+sc start {service_name}
+sc stop {service_name}
+sc delete {service_name}
+")
 }
 
 fn get_create_service(exe: &str) -> String {
@@ -3982,18 +3988,19 @@ if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{ap
 ", app_name = crate::get_app_name())
     } else {
         let exe = escape_nested_cmd_ampersands(exe);
+        let service_name = crate::get_install_app_name();
+        let display_name = crate::get_app_name();
         format!("
-sc query {app_name} >nul 2>&1
+sc query {service_name} >nul 2>&1
 if errorlevel 1 (
-    sc create {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
+    sc create {service_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{display_name} Service\"
 ) else (
-    sc config {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto
+    sc config {service_name} binpath= \"\\\"{exe}\\\" --service\" start= auto
 )
-sc failure {app_name} reset= 86400 actions= restart/5000/restart/10000/restart/30000
-sc failureflag {app_name} 1
-sc start {app_name}
-",
-    app_name = crate::get_app_name())
+sc failure {service_name} reset= 86400 actions= restart/5000/restart/10000/restart/30000
+sc failureflag {service_name} 1
+sc start {service_name}
+")
     }
 }
 
@@ -4203,7 +4210,7 @@ fn get_uninstall_amyuni_idd() -> String {
 
 #[inline]
 pub fn is_self_service_running() -> bool {
-    is_service_running(&crate::get_app_name())
+    is_service_running(&crate::get_install_app_name())
 }
 
 pub fn is_service_running(service_name: &str) -> bool {
@@ -4880,8 +4887,18 @@ mod tests {
     #[test]
     fn install_app_names_enforce_ascii_command_safety() {
         assert!(validate_install_app_name("RustDesk-Admin1").is_ok());
-        assert!(validate_install_app_name("BetterDesk Client").is_ok());
-        for app_name in ["", "RustDesk_Admin", "RustDesk&whoami", "RustDesk应用"] {
+        assert!(validate_install_app_name("RustDesk_Admin").is_ok());
+        // Display names with spaces must not be validated raw; derive the install token.
+        assert!(validate_install_app_name("BetterDesk Client").is_err());
+        assert_eq!(
+            crate::install_app_name_from_display("BetterDesk Client"),
+            "BetterDesk-Client"
+        );
+        assert!(validate_install_app_name(&crate::install_app_name_from_display(
+            "BetterDesk Client"
+        ))
+        .is_ok());
+        for app_name in ["", "RustDesk&whoami", "RustDesk应用"] {
             assert!(
                 validate_install_app_name(app_name).is_err(),
                 "unsafe application name was accepted: {app_name}"
