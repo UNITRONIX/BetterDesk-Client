@@ -106,9 +106,13 @@ pub(super) fn verified_update_artifact_from_release_page_url(
 ) -> ResultType<VerifiedUpdateArtifact> {
     let release_id = release_id_from_update_url(update_url)?;
     let display_version = display_version_from_release_id(&release_id)?;
+    // Follow the release page the operator/feed pointed at. Hardcoding upstream here made
+    // every BetterDesk release fail metadata verification.
+    let (owner, repo) = update_repo_from_release_page_url(update_url)?;
     let expected_artifact_url_prefix =
-        format!("https://github.com/rustdesk/rustdesk/releases/download/{release_id}/");
-    let metadata_url = format!("{expected_artifact_url_prefix}rustdesk-update.json");
+        format!("https://github.com/{owner}/{repo}/releases/download/{release_id}/");
+    let metadata_file = update_metadata_file_name(&owner, &repo);
+    let metadata_url = format!("{expected_artifact_url_prefix}{metadata_file}");
     let signature_url = format!("{metadata_url}.sig");
     let metadata_bytes = fetch_update_sidecar_bytes(&metadata_url)?;
     let signature_bytes = fetch_update_sidecar_bytes(&signature_url)?;
@@ -117,8 +121,37 @@ pub(super) fn verified_update_artifact_from_release_page_url(
         expected_release_id: release_id.as_str(),
         expected_artifact_url_prefix: expected_artifact_url_prefix.as_str(),
         artifact: *query,
+        expected_package_id: "betterdesk-desktop",
     };
-    crate::update_metadata::verify_update_metadata(&metadata_bytes, &signature_bytes, requirements)
+    crate::update_metadata::verify_betterdesk_update_metadata(
+        &metadata_bytes,
+        &signature_bytes,
+        requirements,
+    )
+}
+
+/// Owner/repo of a validated release-tag URL (`https://github.com/<owner>/<repo>/releases/tag/<id>`).
+fn update_repo_from_release_page_url(update_url: &str) -> ResultType<(&'static str, &'static str)> {
+    let url = url::Url::parse(update_url)?;
+    let segments = url
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())
+        .unwrap_or_default();
+    match segments.as_slice() {
+        ["rustdesk", "rustdesk", "releases", "tag", ..] => Ok(("rustdesk", "rustdesk")),
+        ["UNITRONIX", "BetterDesk-Client", "releases", "tag", ..] => {
+            Ok(("UNITRONIX", "BetterDesk-Client"))
+        }
+        _ => bail!("Update URL is not a known release tag URL: {}", update_url),
+    }
+}
+
+fn update_metadata_file_name(owner: &str, repo: &str) -> &'static str {
+    if owner == "UNITRONIX" && repo == "BetterDesk-Client" {
+        "betterdesk-update.json"
+    } else {
+        "rustdesk-update.json"
+    }
 }
 
 fn fetch_update_sidecar_bytes(url: &str) -> ResultType<Vec<u8>> {
@@ -177,8 +210,7 @@ pub fn get_update_download_file_from_url(url: &str) -> Option<PathBuf> {
     let tag = segments.next()?;
     let filename = segments.next()?;
 
-    if owner != "rustdesk"
-        || repo != "rustdesk"
+    if !is_trusted_update_repo(owner, repo)
         || releases != "releases"
         || download != "download"
         || tag.is_empty()
@@ -189,6 +221,18 @@ pub fn get_update_download_file_from_url(url: &str) -> Option<PathBuf> {
     }
 
     Some(std::env::temp_dir().join(filename))
+}
+
+/// Repositories whose release assets may be downloaded as an update.
+///
+/// Upstream is kept so the manual/offline path keeps working; BetterDesk builds download
+/// their own artifacts. Any other owner/repo is refused, so a tampered manifest cannot
+/// point the updater at arbitrary storage.
+fn is_trusted_update_repo(owner: &str, repo: &str) -> bool {
+    matches!(
+        (owner, repo),
+        ("rustdesk", "rustdesk") | ("UNITRONIX", "BetterDesk-Client")
+    )
 }
 
 fn is_plain_update_filename(filename: &str) -> bool {
@@ -222,6 +266,29 @@ mod tests {
             file.file_name().and_then(|name| name.to_str()),
             Some("rustdesk-1.4.0-x86_64.dmg")
         );
+    }
+
+    #[test]
+    fn update_download_file_accepts_betterdesk_release_assets() {
+        // The BetterDesk feed points at our own releases; refusing them would make every
+        // update fail after the manifest verified successfully.
+        let file = get_update_download_file_from_url(
+            "https://github.com/UNITRONIX/BetterDesk-Client/releases/download/desktop-v1.5.1/betterdesk-1.5.1-x86_64.msi",
+        )
+        .expect("BetterDesk release asset URL");
+        assert_eq!(
+            file.file_name().and_then(|name| name.to_str()),
+            Some("betterdesk-1.5.1-x86_64.msi")
+        );
+    }
+
+    #[test]
+    fn update_download_file_rejects_other_repos_in_the_same_org() {
+        // Same owner, different repository must not be trusted just because the org matches.
+        assert!(get_update_download_file_from_url(
+            "https://github.com/UNITRONIX/BetterDesk/releases/download/v1/betterdesk-1-x86_64.msi",
+        )
+        .is_none());
     }
 
     #[test]

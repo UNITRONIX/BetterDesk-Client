@@ -23,6 +23,13 @@ def main() -> int:
         type=Path,
         default=Path(__file__).resolve().parents[1] / "res" / "betterdesk",
     )
+    parser.add_argument(
+        "--kind",
+        choices=("custom-client", "update"),
+        default="custom-client",
+        help="custom-client: signs custom.txt (panel Generator). "
+        "update: signs appcast/<channel>.json (client update feed).",
+    )
     args = parser.parse_args()
 
     try:
@@ -35,15 +42,26 @@ def main() -> int:
     pub_b64 = base64.b64encode(bytes(sk.verify_key)).decode("ascii")
     seed_b64 = base64.b64encode(bytes(sk)).decode("ascii")
 
+    # Two independent keys on purpose: the update key signs what the client installs,
+    # the custom-client key signs panel-generated config. Sharing one would let a config
+    # signing operation reach the update trust root.
+    stem = "custom-client-signing" if args.kind == "custom-client" else "client-update-signing"
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    pub_path = args.out_dir / "custom-client-signing.pub"
-    seed_path = args.out_dir / "custom-client-signing.seed"
+    pub_path = args.out_dir / f"{stem}.pub"
+    seed_path = args.out_dir / f"{stem}.seed"
     pub_path.write_text(pub_b64 + "\n", encoding="utf-8")
     seed_path.write_text(seed_b64 + "\n", encoding="utf-8")
 
     print(f"Wrote {pub_path}")
-    print(f"Wrote {seed_path} (private — for panel Generator only)")
-    print("Rebuild the desktop client after updating the public key.")
+    if args.kind == "custom-client":
+        print(f"Wrote {seed_path} (private — for panel Generator only)")
+        print("Rebuild the desktop client after updating the public key.")
+    else:
+        print(f"Wrote {seed_path} (private — CI secret BETTERDESK_CLIENT_RELEASE_SIGNING_SEED)")
+        print(
+            "Store the seed as the repository secret BETTERDESK_CLIENT_RELEASE_SIGNING_SEED "
+            "and rebuild the desktop client so the .pub is embedded."
+        )
     return 0
 
 

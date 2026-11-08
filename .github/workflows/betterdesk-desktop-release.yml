@@ -12,7 +12,8 @@ name: BetterDesk desktop release
 on:
   push:
     branches:
-      - master
+      - dev
+      - main
     tags:
       - "desktop/*"
     paths-ignore:
@@ -27,6 +28,14 @@ on:
         description: "Release tag (e.g. desktop/1.5.0 or desktop/dev-manual)"
         required: true
         default: "desktop/dev-manual"
+      channel:
+        description: "Update channel: dev (prerelease) or stable"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - stable
 
 concurrency:
   group: betterdesk-desktop-release-${{ github.workflow }}-${{ github.ref }}
@@ -46,6 +55,7 @@ jobs:
       tag_name: ${{ steps.meta.outputs.tag_name }}
       release_name: ${{ steps.meta.outputs.release_name }}
       is_dev: ${{ steps.meta.outputs.is_dev }}
+      channel: ${{ steps.meta.outputs.channel }}
       previous_tag: ${{ steps.meta.outputs.previous_tag }}
     steps:
       - name: Checkout
@@ -64,7 +74,8 @@ jobs:
 
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             TAG_NAME="${{ github.event.inputs.tag_name }}"
-            IS_DEV=true
+            CHANNEL="${{ github.event.inputs.channel }}"
+            if [ "${CHANNEL}" = "stable" ]; then IS_DEV=false; else IS_DEV=true; fi
           elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             TAG_NAME="${GITHUB_REF_NAME}"
             # Tagged desktop/* releases are still prereleases unless name omits "dev"
@@ -73,16 +84,24 @@ jobs:
             else
               IS_DEV=false
             fi
+          elif [ "${GITHUB_REF_NAME}" = "main" ]; then
+            # Stable: only pushes to main promote a build to the stable channel.
+            TAG_NAME="desktop-v${VERSION}"
+            IS_DEV=false
           else
-            # Push to master → development prerelease per update
-            TAG_NAME="desktop/${VERSION}-dev.${RUN_N}-${SHORT_SHA}"
+            # Push to dev → development prerelease per update.
+            # No '/' in the tag: a slash splits the release asset URL into extra path
+            # segments, which the client's release-id validation rejects by design.
+            TAG_NAME="desktop-v${VERSION}-dev.${RUN_N}-${SHORT_SHA}"
             IS_DEV=true
           fi
 
           if [ "${IS_DEV}" = "true" ]; then
             RELEASE_NAME="BetterDesk Client ${VERSION} (dev ${RUN_N})"
+            CHANNEL="dev"
           else
             RELEASE_NAME="BetterDesk Client ${VERSION}"
+            CHANNEL="stable"
           fi
 
           # Previous BetterDesk desktop tag for changelog (fallback: last 20 commits)
@@ -95,12 +114,14 @@ jobs:
             echo "tag_name=${TAG_NAME}"
             echo "release_name=${RELEASE_NAME}"
             echo "is_dev=${IS_DEV}"
+            echo "channel=${CHANNEL}"
             echo "previous_tag=${PREV}"
           } >> "${GITHUB_OUTPUT}"
 
           echo "tag_name=${TAG_NAME}"
           echo "release_name=${RELEASE_NAME}"
           echo "is_dev=${IS_DEV}"
+          echo "channel=${CHANNEL}"
           echo "previous_tag=${PREV}"
 
   build:
@@ -114,6 +135,10 @@ jobs:
   package-clean-and-release:
     name: Package clean BetterDesk Client + release notes
     needs: [prepare, build]
+    # `always()` so one failed matrix leg (e.g. a macOS runner that never got scheduled)
+    # does not discard every artifact that did build. The publish step is guarded by a
+    # completeness check, so a partial matrix still cannot produce a release with dead links.
+    if: always() && needs.prepare.result == 'success' && needs.build.result != 'cancelled'
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -270,6 +295,9 @@ jobs:
       - name: Pack generator templates (clean binaries only)
         shell: bash
         run: |
+          # Guard the download-table generator before it can produce a release body: a
+          # template MSI or a collapsed Markdown table would ship dead links.
+          python3 scripts/test_release_download_table.py
           python3 scripts/test_generator_contract.py
           # Templates are clean trees for the console Generator — not a Support build.
           # Support Agent custom.txt is applied by the panel, never in this workflow.
@@ -313,6 +341,66 @@ jobs:
           print(json.dumps(manifest, indent=2))
           PY
 
+      - name: Build update feed (appcast)
+        # The client's update check reads appcast/<channel>.json and verifies it with the
+        # key embedded in src/update_metadata.rs. Only stable.json comes from main, so a
+        # "stable" client never sees a dev build.
+        shell: bash
+        env:
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          RELEASE_ID: ${{ needs.prepare.outputs.tag_name }}
+          BETTERDESK_CLIENT_RELEASE_SIGNING_SEED: ${{ secrets.BETTERDESK_CLIENT_RELEASE_SIGNING_SEED }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BETTERDESK_CLIENT_RELEASE_SIGNING_SEED:-}" ]; then
+            echo "::error::BETTERDESK_CLIENT_RELEASE_SIGNING_SEED is not configured; refusing to publish an unsigned update feed"
+            exit 1
+          fi
+          python3 scripts/build_update_feed.py \
+            --artifacts-dir dist/clean \
+            --channel "${CHANNEL}" \
+            --version "${VERSION}" \
+            --release-id "${RELEASE_ID}" \
+            --release-base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download" \
+            --published-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --require-installable \
+            --out-dir dist/feed
+          ls -la dist/feed
+          cat "dist/feed/${CHANNEL}.json"
+
+      - name: Publish feed to update-feed branch
+        # Kept on a dedicated branch so the client (and the panel, as a mirror) can fetch a
+        # stable raw URL without depending on a release's asset name.
+        shell: bash
+        env:
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          RELEASE_ID: ${{ needs.prepare.outputs.tag_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d)"
+          git config --global user.name "betterdesk-ci"
+          git config --global user.email "ci@unitronix.invalid"
+          if git clone --depth 1 --branch update-feed \
+              "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${workdir}"; then
+            :
+          else
+            mkdir -p "${workdir}"
+            git -C "${workdir}" init
+            git -C "${workdir}" checkout -b update-feed
+            git -C "${workdir}" remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          fi
+          mkdir -p "${workdir}/appcast"
+          cp "dist/feed/${CHANNEL}.json" "dist/feed/${CHANNEL}.json.sig" "${workdir}/appcast/"
+          cd "${workdir}"
+          git add appcast
+          if git diff --cached --quiet; then
+            echo "Feed unchanged"
+            exit 0
+          fi
+          git commit -m "chore(appcast): ${CHANNEL} ${RELEASE_ID}"
+          git push origin update-feed
+
       - name: Build release notes
         id: notes
         shell: bash
@@ -345,7 +433,9 @@ jobs:
             echo "- Configure servers in Settings → Network, or import a deploy string from the BetterDesk panel."
             echo "- Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             if [ "${IS_DEV}" = "true" ]; then
-              echo "- This is a **development prerelease** published after an update on \`master\`."
+              echo "- This is a **development prerelease** on the \`dev\` channel (update feed: \`appcast/dev.json\`)."
+            else
+              echo "- This is a **stable release** on the \`main\` channel (update feed: \`appcast/stable.json\`)."
             fi
           } > changelog-extra.md
 
@@ -372,6 +462,51 @@ jobs:
           echo "Wrote release-notes.md"
           head -n 60 release-notes.md
 
+      - name: Verify release notes only link staged assets
+        # A partial matrix (a runner that never scheduled, a failed target) used to produce a
+        # table whose links 404'd, or an MSI link that pointed at the Generator template.
+        # Compare every download link against the files that will actually be uploaded.
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re, sys
+          from pathlib import Path
+
+          notes = Path("release-notes.md").read_text(encoding="utf-8")
+          # Assets attached by the publish step, plus the feed written above.
+          staged = set()
+          for pattern in ("dist/clean/*", "dist/msi-template/*", "dist/feed/*"):
+              staged.update(p.name for p in Path(".").glob(pattern) if p.is_file())
+          staged.update(p.name for p in Path(".").glob("dist/generator-templates-*.tar.gz*") if p.is_file())
+
+          links = re.findall(r"\[[^\]]+\]\((https://github\.com/[^)\s]+)\)", notes)
+          bad = []
+          template_links = []
+          for url in links:
+              if "/releases/download/" not in url:
+                  continue
+              name = url.rstrip("/").rsplit("/", 1)[-1]
+              if name.startswith("betterdesk-template"):
+                  template_links.append(name)
+              if name not in staged:
+                  bad.append(name)
+
+          failed = False
+          if template_links:
+              print("error: release notes link a Generator template as an installer: "
+                    + ", ".join(sorted(set(template_links))), file=sys.stderr)
+              failed = True
+          if bad:
+              print("error: release notes link assets that will not be attached: "
+                    + ", ".join(sorted(set(bad))), file=sys.stderr)
+              print("staged:", ", ".join(sorted(staged)), file=sys.stderr)
+              failed = True
+          if failed:
+              sys.exit(1)
+          print(f"release notes: {len(links)} link(s) checked against {len(staged)} staged asset(s)")
+          PY
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -385,5 +520,6 @@ jobs:
             dist/msi-template/*
             dist/generator-templates-*.tar.gz
             dist/generator-templates-*.tar.gz.sha256
+            dist/feed/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

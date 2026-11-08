@@ -1,4 +1,5 @@
 ﻿mod artifact;
+pub mod channel;
 mod download;
 
 use crate::common::do_check_software_update;

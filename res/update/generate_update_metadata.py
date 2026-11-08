@@ -29,6 +29,21 @@ KEY_ID = "2026-ed25519-main"
 SEED_ENV = "RUSTDESK_UPDATE_ED25519_SEED"
 PUBLIC_KEY_ENV = "RUSTDESK_UPDATE_ED25519_PUBLIC_KEY"
 
+# BetterDesk appcast. Same wire format as upstream so the client verifies it with the
+# existing `update_metadata` code, but a distinct app id, key id, and signature context:
+# a manifest signed for upstream RustDesk must never validate a BetterDesk build.
+BETTERDESK_APP_NAME = "betterdesk-client"
+BETTERDESK_SIGNATURE_CONTEXT = b"BetterDesk client update metadata v1\n"
+BETTERDESK_KEY_ID = "2026-ed25519-betterdesk-client"
+BETTERDESK_SEED_ENV = "BETTERDESK_CLIENT_RELEASE_SIGNING_SEED"
+BETTERDESK_PUBLIC_KEY_ENV = "BETTERDESK_CLIENT_RELEASE_PUBLIC_KEY"
+
+
+def signature_context_for(app_name):
+    if app_name == BETTERDESK_APP_NAME:
+        return BETTERDESK_SIGNATURE_CONTEXT
+    return SIGNATURE_CONTEXT
+
 
 def fail(message):
     raise SystemExit(message)
@@ -106,6 +121,15 @@ def command_sign(args):
     release_base_url = validate_or_fail(
         validate_release_base_url, args.release_base_url
     )
+    app_name = args.app_name
+    if app_name == BETTERDESK_APP_NAME:
+        key_id, seed_env, context = (
+            BETTERDESK_KEY_ID,
+            BETTERDESK_SEED_ENV,
+            BETTERDESK_SIGNATURE_CONTEXT,
+        )
+    else:
+        key_id, seed_env, context = KEY_ID, SEED_ENV, SIGNATURE_CONTEXT
     artifacts = [
         artifact_metadata(spec, args.release_id, release_base_url)
         for spec in args.artifact
@@ -119,22 +143,22 @@ def command_sign(args):
     artifacts.sort(key=lambda item: (item["platform"], item["arch"], item["format"]))
     metadata = {
         "schema_version": SCHEMA_VERSION,
-        "app": APP_NAME,
+        "app": app_name,
         "package_id": package_id,
         "version": args.version,
         "release_id": args.release_id,
         "published_at": args.published_at,
-        "signature_key_id": KEY_ID,
+        "signature_key_id": key_id,
         "artifacts": artifacts,
     }
-    private_key = ed25519.Ed25519PrivateKey.from_private_bytes(decode_env(SEED_ENV, 32))
+    private_key = ed25519.Ed25519PrivateKey.from_private_bytes(decode_env(seed_env, 32))
     metadata_bytes = stable_json(metadata)
     signature = {
         "schema_version": SCHEMA_VERSION,
         "algorithm": SIGNATURE_ALGORITHM,
-        "key_id": KEY_ID,
+        "key_id": key_id,
         "signature": base64.b64encode(
-            private_key.sign(SIGNATURE_CONTEXT + metadata_bytes)
+            private_key.sign(context + metadata_bytes)
         ).decode("ascii"),
     }
     write_bytes(metadata_out, metadata_bytes)
@@ -142,17 +166,23 @@ def command_sign(args):
 
 
 def verify_metadata_signature(metadata_bytes, signature):
+    verify_signature(metadata_bytes, signature, KEY_ID, PUBLIC_KEY_ENV, SIGNATURE_CONTEXT)
+
+
+def verify_signature(metadata_bytes, signature, key_id, public_key_env, context):
     if (
         signature.get("schema_version") != SCHEMA_VERSION
         or signature.get("algorithm") != SIGNATURE_ALGORITHM
-        or signature.get("key_id") != KEY_ID
+        or signature.get("key_id") != key_id
     ):
         fail("invalid signature metadata")
-    public_key = ed25519.Ed25519PublicKey.from_public_bytes(decode_env(PUBLIC_KEY_ENV, 32))
+    public_key = ed25519.Ed25519PublicKey.from_public_bytes(
+        decode_env(public_key_env, 32)
+    )
     try:
         public_key.verify(
             base64.b64decode(signature["signature"], validate=True),
-            SIGNATURE_CONTEXT + metadata_bytes,
+            context + metadata_bytes,
         )
     except (InvalidSignature, ValueError, binascii.Error):
         fail("invalid metadata signature")
@@ -193,18 +223,27 @@ def command_verify(args):
     metadata_bytes = Path(args.metadata).read_bytes()
     metadata = json.loads(metadata_bytes)
     signature = json.loads(Path(args.signature).read_bytes())
-    verify_metadata_signature(metadata_bytes, signature)
+    app_name = args.app_name
+    if app_name == BETTERDESK_APP_NAME:
+        key_id, public_key_env, context = (
+            BETTERDESK_KEY_ID,
+            BETTERDESK_PUBLIC_KEY_ENV,
+            BETTERDESK_SIGNATURE_CONTEXT,
+        )
+    else:
+        key_id, public_key_env, context = KEY_ID, PUBLIC_KEY_ENV, SIGNATURE_CONTEXT
+    verify_signature(metadata_bytes, signature, key_id, public_key_env, context)
     package_id = validate_or_fail(validate_package_id, args.package_id)
     release_base_url = validate_or_fail(
         validate_release_base_url, args.release_base_url
     )
     expected_fields = {
         "schema_version": SCHEMA_VERSION,
-        "app": APP_NAME,
+        "app": app_name,
         "package_id": package_id,
         "version": args.version,
         "release_id": args.release_id,
-        "signature_key_id": KEY_ID,
+        "signature_key_id": key_id,
     }
     if any(metadata.get(key) != value for key, value in expected_fields.items()):
         fail("metadata does not match the release")
@@ -270,6 +309,9 @@ def build_parser():
     sign.add_argument("--published-at", required=True)
     sign.add_argument("--metadata-out", required=True)
     sign.add_argument("--signature-out", required=True)
+    # BetterDesk appcast: distinct app id / key id / signature context so an upstream
+    # manifest can never be accepted for a BetterDesk channel.
+    sign.add_argument("--app-name", default=APP_NAME)
     sign.set_defaults(func=command_sign)
     verify = commands.add_parser("verify")
     verify.add_argument("--metadata", required=True)
@@ -279,6 +321,7 @@ def build_parser():
     verify.add_argument("--release-id", required=True)
     verify.add_argument("--package-id", required=True)
     verify.add_argument("--release-base-url", required=True)
+    verify.add_argument("--app-name", default=APP_NAME)
     verify.set_defaults(func=command_verify)
     check_key = commands.add_parser("check-key")
     check_key.add_argument(
