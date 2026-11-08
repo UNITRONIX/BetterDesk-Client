@@ -1331,32 +1331,62 @@ fn get_valid_subkey() -> String {
 
 // Return install options other than InstallLocation.
 pub fn get_install_options() -> String {
-    let subkey = format!(".{}", crate::get_install_app_name().to_lowercase());
     let mut opts = HashMap::new();
-
-    let desktop_shortcuts = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_DESKTOPSHORTCUTS);
-    if let Some(desktop_shortcuts) = desktop_shortcuts {
-        opts.insert(REG_NAME_INSTALL_DESKTOPSHORTCUTS, desktop_shortcuts);
-    }
-    let start_menu_shortcuts = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_STARTMENUSHORTCUTS);
-    if let Some(start_menu_shortcuts) = start_menu_shortcuts {
-        opts.insert(REG_NAME_INSTALL_STARTMENUSHORTCUTS, start_menu_shortcuts);
-    }
-    let printer = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_PRINTER);
-    if let Some(printer) = printer {
-        opts.insert(REG_NAME_INSTALL_PRINTER, printer);
+    for subkey in install_option_subkeys() {
+        let desktop_shortcuts = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_DESKTOPSHORTCUTS);
+        if let Some(desktop_shortcuts) = desktop_shortcuts {
+            opts.insert(REG_NAME_INSTALL_DESKTOPSHORTCUTS, desktop_shortcuts);
+        }
+        let start_menu_shortcuts = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_STARTMENUSHORTCUTS);
+        if let Some(start_menu_shortcuts) = start_menu_shortcuts {
+            opts.insert(REG_NAME_INSTALL_STARTMENUSHORTCUTS, start_menu_shortcuts);
+        }
+        let printer = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_PRINTER);
+        if let Some(printer) = printer {
+            opts.insert(REG_NAME_INSTALL_PRINTER, printer);
+        }
     }
     serde_json::to_string(&opts).unwrap_or("{}".to_owned())
+}
+
+/// HKCR subkeys that may hold install options, newest identity first.
+///
+/// Packages built before the install identity was separated from the display name
+/// wrote `.betterdesk client` (the display name lowercased, spaces included). Reading
+/// both keeps an upgrade from silently losing the operator's shortcut / printer choices,
+/// and the first value found wins.
+fn install_option_subkeys() -> Vec<String> {
+    let mut subkeys = vec![format!(
+        ".{}",
+        crate::get_install_app_name().to_lowercase()
+    )];
+    let display_subkey = format!(".{}", crate::get_app_name().to_lowercase());
+    if !subkeys.contains(&display_subkey) {
+        subkeys.push(display_subkey);
+    }
+    subkeys
+}
+
+/// First non-empty value of an install option across known install identities.
+///
+/// Used by the verified-MSI updater, which must not change behaviour for installs
+/// that still store their options under the legacy display-name key.
+pub fn get_install_option(name: &str) -> Option<String> {
+    install_option_subkeys()
+        .iter()
+        .filter_map(|subkey| get_reg_of_hkcr(subkey, name))
+        .next()
 }
 
 pub fn get_silent_install_options(printer_override: Option<bool>) -> &'static str {
     let install_printer = match printer_override {
         Some(override_value) => override_value,
-        None => {
-            let subkey = format!(".{}", crate::get_install_app_name().to_lowercase());
-            let printer = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_PRINTER);
-            printer.as_deref() == Some("1")
-        }
+        None => install_option_subkeys()
+            .iter()
+            .filter_map(|subkey| get_reg_of_hkcr(subkey, REG_NAME_INSTALL_PRINTER))
+            .next()
+            .as_deref()
+            == Some("1"),
     };
     if install_printer && is_win_10_or_greater() {
         "desktopicon startmenu printer"
@@ -3990,8 +4020,12 @@ if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{ap
         let exe = escape_nested_cmd_ampersands(exe);
         let service_name = crate::get_install_app_name();
         let display_name = crate::get_app_name();
+        // A service registered under the old display-name identity keeps running the
+        // previous build and hides the real one from the tray and the installer. The
+        // legacy name contains spaces, so it is quoted and screened for cmd metacharacters.
+        let legacy_service_cleanup = legacy_service_cleanup(&display_name, &service_name);
         format!("
-sc query {service_name} >nul 2>&1
+{legacy_service_cleanup}sc query {service_name} >nul 2>&1
 if errorlevel 1 (
     sc create {service_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{display_name} Service\"
 ) else (
@@ -4002,6 +4036,25 @@ sc failureflag {service_name} 1
 sc start {service_name}
 ")
     }
+}
+
+/// Commands that remove a Windows service left over from the display-name identity.
+///
+/// Packages before the install-identity split created the service as `BetterDesk Client`;
+/// the client now registers `BetterDesk-Client`. Without this cleanup the old service keeps
+/// running the previous binary, so an upgrade appears to succeed while the app still talks
+/// to the old build. Screened as a cmd argument because the name contains spaces.
+fn legacy_service_cleanup(display_name: &str, install_name: &str) -> String {
+    if display_name == install_name || !is_safe_service_name(display_name) {
+        return String::new();
+    }
+    format!("sc stop \"{display_name}\" >nul 2>&1\r\nsc delete \"{display_name}\" >nul 2>&1\r\n")
+}
+
+fn is_safe_service_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 256
+        && !name.contains(['\0', '"', '%', '\r', '\n', '|', '<', '>', '&', '^'])
 }
 
 fn run_after_run_cmds(silent: bool) {
@@ -4904,6 +4957,18 @@ mod tests {
                 "unsafe application name was accepted: {app_name}"
             );
         }
+    }
+
+    #[test]
+    fn legacy_service_cleanup_matches_the_old_identity_only() {
+        let cleanup = legacy_service_cleanup("BetterDesk Client", "BetterDesk-Client");
+        assert!(cleanup.contains("sc stop \"BetterDesk Client\""));
+        assert!(cleanup.contains("sc delete \"BetterDesk Client\""));
+        // Nothing to remove when both identities agree.
+        assert!(legacy_service_cleanup("BetterDesk-Client", "BetterDesk-Client").is_empty());
+        // A display name carrying a cmd metacharacter must not reach the script.
+        assert!(legacy_service_cleanup("Better&Desk", "BetterDesk").is_empty());
+        assert!(legacy_service_cleanup("Better%Desk%", "BetterDesk").is_empty());
     }
 
     #[test]

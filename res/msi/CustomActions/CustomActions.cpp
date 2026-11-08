@@ -562,7 +562,29 @@ LExit:
     return WcaFinalize(er);
 }
 
+void RemoveServiceW(LPCWSTR serviceName);
 void TryStopDeleteServiceByShell(LPWSTR svcName);
+
+// Stop and delete a service that must no longer exist. Best effort: an absent service
+// is the normal case on first install, so this never fails the package.
+void RemoveServiceW(LPCWSTR serviceName)
+{
+    if (serviceName == NULL || *serviceName == L'\0') {
+        return;
+    }
+    if (MyStopServiceW(const_cast<LPWSTR>(serviceName))) {
+        for (int i = 0; i < 10 && IsServiceRunningW(serviceName); i++) {
+            Sleep(100);
+        }
+    }
+    if (!MyDeleteServiceW(const_cast<LPWSTR>(serviceName))) {
+        WcaLog(LOGMSG_STANDARD, "Legacy service %ls not deleted, error: 0x%02X", serviceName, GetLastError());
+    }
+    else {
+        WcaLog(LOGMSG_STANDARD, "Legacy service %ls deleted", serviceName);
+    }
+}
+
 UINT __stdcall TryStopDeleteService(__in MSIHANDLE hInstall)
 {
     HRESULT hr = S_OK;
@@ -631,6 +653,14 @@ UINT __stdcall TryStopDeleteService(__in MSIHANDLE hInstall)
         }
     }
 
+    // Packages from before the install-identity split registered a second, display-named
+    // service, which the binary no longer looks for. Removing it here keeps one service
+    // and one binary version on the host.
+    LPWSTR legacySvcName = NULL;
+    if (SUCCEEDED(WcaReadStringFromCaData(&pwz, &legacySvcName)) &&
+        legacySvcName != NULL && *legacySvcName != L'\0') {
+        RemoveServiceW(legacySvcName);
+    }
     // It's really strange that we need sleep here.
     // But the upgrading may be stuck at "copying new files" because the file is in using.
     // Steps to reproduce: Install -> stop service in tray --> start service -> upgrade

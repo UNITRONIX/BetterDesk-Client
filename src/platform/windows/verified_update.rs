@@ -1,7 +1,7 @@
 mod file;
 
 use super::{
-    get_custom_client_staging_dir, get_reg_of_hkcr,
+    get_custom_client_staging_dir, get_install_option,
     handle_custom_client_staging_dir_before_update, installer_handoff::run_cmds,
     installer_shell::path_for_cmd_environment, remove_custom_client_staging_dir, ResultType,
     REG_NAME_INSTALL_PRINTER,
@@ -123,8 +123,7 @@ fn verified_msi_install_commands(
     let hash_pattern = verified_update_hash_pattern(expected_sha256)?;
     let quiet_args = if quiet { " /qn LAUNCH_TRAY_APP=N" } else { "" };
     let app_name = crate::get_app_name();
-    let subkey = format!(".{}", app_name.to_lowercase());
-    let printer_installed = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_PRINTER).as_deref()
+    let printer_installed = get_install_option(REG_NAME_INSTALL_PRINTER).as_deref()
         != Some("0")
         && remote_printer::is_rd_printer_installed(&app_name).unwrap_or_else(|err| {
             log::warn!(

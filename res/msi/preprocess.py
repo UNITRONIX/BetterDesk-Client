@@ -3,6 +3,7 @@
 
 import json
 import sys
+import os
 import uuid
 import argparse
 import datetime
@@ -39,8 +40,53 @@ g_arpsystemcomponent = {
     },
 }
 
+# The MSI version has four numeric fields; revision must be 0..65535. A value derived
+# from the wall clock overflowed that range and differed on every build, so two packages
+# built from the same source could ask MSI to repair or downgrade each other. Keep it
+# deterministic and overridable for operators who publish several builds per version.
 def default_revision_version():
-    return int(datetime.datetime.now().timestamp() / 60)
+    raw = os.environ.get("BETTERDESK_MSI_REVISION", "0").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        raise SystemExit(f"BETTERDESK_MSI_REVISION must be an integer, got {raw!r}")
+    if value < 0 or value > 65535:
+        raise SystemExit(f"BETTERDESK_MSI_REVISION must be 0..65535, got {value}")
+    return value
+
+
+# Stable for every BetterDesk desktop build: it must never be derived from a display
+# name, or a rebrand creates a second product in ARP instead of upgrading the first.
+PRODUCT_UPGRADE_CODE = uuid.uuid5(uuid.NAMESPACE_OID, "unitronix.betterdesk.desktop")
+# UpgradeCode used by releases that derived it from the display name. Kept only so an
+# upgrade removes those installations instead of leaving them side by side.
+LEGACY_UPGRADE_CODES = (
+    uuid.uuid5(uuid.NAMESPACE_OID, "BetterDesk Client.exe"),
+    uuid.uuid5(uuid.NAMESPACE_OID, "RustDesk.exe"),
+)
+
+INSTALL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def legacy_service_name(args) -> str:
+    """Service name written by packages that used the display name as identity.
+
+    Upgrades must stop and delete that service, otherwise it keeps running the old
+    binary and the new install appears to have "lost" its service.
+    """
+    legacy = args.app_name
+    if legacy == args.install_name:
+        return ""
+    return legacy
+
+
+def install_name_from_display(display: str) -> str:
+    """Mirror of `install_app_name_from_display` in the Rust client.
+
+    Privileged `sc` commands and the service name only accept [A-Za-z0-9_-], so the
+    display name ("BetterDesk Client") cannot be used as the install identity.
+    """
+    return "-".join(display.split())
 
 def make_parser():
     parser = argparse.ArgumentParser(description="Msi preprocess script.")
@@ -82,6 +128,13 @@ def make_parser():
     )
     parser.add_argument(
         "--app-name", type=str, default="BetterDesk Client", help="The app name."
+    )
+    parser.add_argument(
+        "--install-name",
+        type=str,
+        default="",
+        help="Space-free install identity (Windows service name, HKCR key). "
+        "Defaults to the display name with whitespace runs replaced by '-'.",
     )
     parser.add_argument(
         "--exe-name", type=str, default="", help="The executable file name."
@@ -246,25 +299,27 @@ def put_app_exe_on_media2():
 
 def gen_pre_vars(args, dist_dir):
     def func(lines, index_start):
-        upgrade_code = uuid.uuid5(uuid.NAMESPACE_OID, app_name + ".exe")
-
         indent = g_indent_unit * 1
+        # One install identity for the service name, HKCR key and config file name.
+        # Derived from InstallName (space-free), never from the display name.
         to_insert_lines = [
             f'{indent}<?define Version="{g_version}" ?>\n',
             f'{indent}<?define Manufacturer="{args.manufacturer}" ?>\n',
             f'{indent}<?define Product="{args.app_name}" ?>\n',
+            f'{indent}<?define InstallName="{args.install_name}" ?>\n',
+            f'{indent}<?define LegacyServiceName="{legacy_service_name(args)}" ?>\n',
             f'{indent}<?define Executable="{args.exe_name}" ?>\n',
             f'{indent}<?define UriScheme="betterdesk" ?>\n',
             f'{indent}<?define LegacyUriScheme="rustdesk" ?>\n',
             f'{indent}<?define Description="{args.app_name} Installer" ?>\n',
-            f'{indent}<?define ProductLower="{args.app_name.lower()}" ?>\n',
+            f'{indent}<?define ProductLower="{args.install_name.lower()}" ?>\n',
             f'{indent}<?define RegKeyRoot=".$(var.ProductLower)" ?>\n',
             f'{indent}<?define RegKeyInstall="$(var.RegKeyRoot)\\Install" ?>\n',
             f'{indent}<?define BuildDir="{dist_dir}" ?>\n',
             f'{indent}<?define BuildDate="{g_build_date}" ?>\n',
             "\n",
-            f"{indent}<!-- The UpgradeCode must be consistent for each product. ! -->\n"
-            f'{indent}<?define UpgradeCode = "{upgrade_code}" ?>\n',
+            f"{indent}<!-- Stable per product, never derived from a name: a rebrand must upgrade, not duplicate. ! -->\n"
+            f'{indent}<?define UpgradeCode = "{PRODUCT_UPGRADE_CODE}" ?>\n',
         ]
 
         for i, line in enumerate(to_insert_lines):
@@ -289,18 +344,33 @@ def replace_app_name_in_langs(app_name):
 def gen_upgrade_info():
     def func(lines, index_start):
         indent = g_indent_unit * 3
+        inner = g_indent_unit * 4
 
         vs = g_version.split(".")
         major = vs[0]
-        upgrade_id = uuid.uuid4()
-        to_insert_lines = [
-            f'{indent}<Upgrade Id="{upgrade_id}">\n',
-            f'{indent}{g_indent_unit}<UpgradeVersion Property="OLD_VERSION_FOUND" Minimum="{major}.0.0" Maximum="{major}.99.99" IncludeMinimum="yes" IncludeMaximum="yes" OnlyDetect="no" IgnoreRemoveFailure="yes" MigrateFeatures="yes" />\n',
-            f"{indent}</Upgrade>\n",
-        ]
+        blocks = []
+        # The current UpgradeCode covers same-major upgrades. The legacy codes were
+        # derived from a display name, so old installs live under a different product;
+        # detect and remove them here instead of leaving two copies side by side.
+        for index, code in enumerate((PRODUCT_UPGRADE_CODE, *LEGACY_UPGRADE_CODES)):
+            if index == 0:
+                version_range = (
+                    f'Minimum="{major}.0.0" Maximum="{major}.99.99" '
+                    'IncludeMinimum="yes" IncludeMaximum="yes" '
+                )
+            else:
+                # Migrate from any version of a name-derived product.
+                version_range = ''
+            upgrade_id = uuid.uuid5(uuid.NAMESPACE_OID, f"upgrade.{code}")
+            blocks.append(
+                f'{indent}<Upgrade Id="{upgrade_id}">\n'
+                f'{inner}<UpgradeVersion Property="OLD_VERSION_FOUND" {version_range}'
+                'OnlyDetect="no" IgnoreRemoveFailure="yes" MigrateFeatures="yes" />\n'
+                f'{indent}</Upgrade>\n'
+            )
 
-        for i, line in enumerate(to_insert_lines):
-            lines.insert(index_start + i + 1, line)
+        for i, block in enumerate(blocks):
+            lines.insert(index_start + i + 1, block)
         return lines
 
     return gen_content_between_tags(
@@ -532,12 +602,43 @@ def replace_component_guids_in_wxs():
             f.writelines(lines)
 
 
+def validate_args(args):
+    """Reject inputs that would produce a package with a broken identity.
+
+    An empty --app-name used to yield UpgradeCode = uuid5(""), Product = "", and
+    RegKeyRoot = "." - a package that installs into Program Files\ and cannot be
+    upgraded or uninstalled cleanly.
+    """
+    if not args.app_name.strip():
+        print("Error: --app-name must not be empty", file=sys.stderr)
+        return False
+    install_name = args.install_name or install_name_from_display(args.app_name)
+    if not INSTALL_NAME_PATTERN.match(install_name):
+        print(
+            f"Error: install name {install_name!r} must match {INSTALL_NAME_PATTERN.pattern} "
+            "(only [A-Za-z0-9_-]); pass --install-name explicitly for a custom identity",
+            file=sys.stderr,
+        )
+        return False
+    args.install_name = install_name
+    if not INSTALL_NAME_PATTERN.match(args.exe_name.rsplit(".", 1)[0]):
+        print(
+            f"Error: executable name {args.exe_name!r} must match {INSTALL_NAME_PATTERN.pattern}",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 if __name__ == "__main__":
     parser = make_parser()
     args = parser.parse_args()
 
-    app_name = args.app_name
     args.exe_name = args.exe_name or ("RDAPPNAM.exe" if args.template else "betterdesk.exe")
+    if not validate_args(args):
+        sys.exit(1)
+
+    app_name = args.app_name
     dist_dir = Path(sys.argv[0]).parent.joinpath(args.dist_dir).resolve()
 
     if not prepare_resources():

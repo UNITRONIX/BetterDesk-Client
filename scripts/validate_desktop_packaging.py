@@ -69,6 +69,42 @@ preprocess = read("res/msi/preprocess.py")
 require("res/msi/preprocess.py", preprocess, 'default="BetterDesk Client"')
 require("res/msi/preprocess.py", preprocess, '"betterdesk.exe"')
 require("res/msi/preprocess.py", preprocess, 'UriScheme="betterdesk"')
+# Install identity: the service name must never come from the display name (spaces),
+# and the UpgradeCode must be stable so a rebrand upgrades instead of duplicating.
+require("res/msi/preprocess.py", preprocess, '--install-name')
+require("res/msi/preprocess.py", preprocess, '<?define InstallName="{args.install_name}" ?>')
+require("res/msi/preprocess.py", preprocess, 'ProductLower="{args.install_name.lower()}"')
+require("res/msi/preprocess.py", preprocess, 'PRODUCT_UPGRADE_CODE')
+require("res/msi/preprocess.py", preprocess, 'unitronix.betterdesk.desktop')
+require("res/msi/preprocess.py", preprocess, 'LEGACY_UPGRADE_CODES')
+if "app_name + \".exe\"" in preprocess:
+    failures.append(
+        "res/msi/preprocess.py: UpgradeCode must not be derived from --app-name"
+    )
+if "datetime.datetime.now().timestamp()" in preprocess:
+    failures.append(
+        "res/msi/preprocess.py: default MSI revision must not depend on the wall clock"
+    )
+rust_common = read("src/common.rs")
+require("src/common.rs", rust_common, "install_app_name_from_display")
+windows_wxs = read("res/msi/Package/Components/RustDesk.wxs")
+require(
+    "res/msi/Package/Components/RustDesk.wxs",
+    windows_wxs,
+    'Property="CreateStartService" Value="$(var.InstallName);',
+)
+require(
+    "res/msi/Package/Components/RustDesk.wxs",
+    windows_wxs,
+    'Property="TryStopDeleteService" Value="$(var.InstallName);$(var.LegacyServiceName)"',
+)
+if 'Property="CreateStartService" Value="$(var.Product);' in windows_wxs:
+    failures.append(
+        "res/msi/Package/Components/RustDesk.wxs: service name must use $(var.InstallName), not $(var.Product)"
+    )
+build_py = read("build.py")
+if "return ''\n\n\ndef parse_rc_features" in build_py:
+    failures.append("build.py: get_version() must not return an empty version")
 regs = read("res/msi/Package/Components/Regs.wxs")
 require("res/msi/Package/Components/Regs.wxs", regs, 'Key="$(var.UriScheme)"')
 require("res/msi/Package/Components/Regs.wxs", regs, 'Key="$(var.LegacyUriScheme)"')

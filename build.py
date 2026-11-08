@@ -68,8 +68,16 @@ def get_version():
     with open("Cargo.toml", encoding="utf-8") as fh:
         for line in fh:
             if line.startswith("version"):
-                return line.replace("version", "").replace("=", "").replace('"', '').strip()
-    return ''
+                value = line.replace("version", "").replace("=", "").replace('"', '').strip()
+                if not value:
+                    break
+                return value
+    # An empty version silently produced artifacts named `betterdesk--install.exe`
+    # and an MSI without a version, so refuse to build instead.
+    sys.stderr.write(
+        "Error: could not read `version` from Cargo.toml; refusing to build unversioned artifacts.\n"
+    )
+    sys.exit(1)
 
 
 def parse_rc_features(feature):

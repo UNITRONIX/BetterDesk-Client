@@ -362,7 +362,7 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
           pushd ./res/msi
-          python preprocess.py --arp -d ../../rustdesk --app-name "BetterDesk Client"
+          python preprocess.py --arp -d ../../rustdesk --app-name "BetterDesk Client" --install-name "BetterDesk-Client"
           nuget restore msi.sln
           $msiPlatform = if ('${{ matrix.job.arch }}' -eq 'aarch64') { 'ARM64' } else { 'x64' }
           msbuild msi.sln -p:Configuration=Release -p:Platform=$msiPlatform /p:TargetVersion=Windows10
@@ -406,7 +406,7 @@ jobs:
             Set-Content -Path "$assets/$a" -Value 'placeholder' -NoNewline
           }
           pushd ./res/msi
-          python preprocess.py --arp --template --revision-version 0 -d ../../rustdesk-msi-template --app-name RDAPPNAM --exe-name RDAPPNAM.exe
+          python preprocess.py --arp --template --revision-version 0 -d ../../rustdesk-msi-template --app-name RDAPPNAM --exe-name RDAPPNAM.exe --install-name RDAPPNAM
           $msiPlatform = if ('${{ matrix.job.arch }}' -eq 'aarch64') { 'ARM64' } else { 'x64' }
           msbuild msi.sln -t:clean -p:Configuration=Release -p:Platform=$msiPlatform
           msbuild msi.sln -p:Configuration=Release -p:Platform=$msiPlatform /p:TargetVersion=Windows10
