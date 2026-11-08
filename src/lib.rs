@@ -64,6 +64,8 @@ mod ui_interface;
 mod ui_session_interface;
 
 mod hbbs_http;
+mod pairing;
+mod secure_store;
 #[cfg(not(target_os = "ios"))]
 mod telemetry;
 

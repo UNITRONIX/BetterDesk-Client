@@ -81,12 +81,26 @@ Flutter bind.mainSetOption(key, val)
 
 ### 4.1. Rozdzielczość URL
 
-[`get_api_server()`](../src/common.rs) / [`ui_interface::get_api_server`](../src/ui_interface.rs):
+[`get_api_server()`](../src/common.rs) / [`ui_interface::get_api_server`](../src/ui_interface.rs) /
+[`hbbs_http::api_base`](../src/hbbs_http/api_base.rs):
 
-1. Licencja Windows (`lic.api` w nazwie exe), jeśli obecna  
-2. Opcja `api-server`  
-3. Z `custom-rendezvous-server`: host z portem **−2** (21114) jako `http://…`  
-4. Domyślnie **pusty string** (BetterDesk nie używa `admin.rustdesk.com`)
+1. Licencja Windows (`lic.api` w nazwie exe), jeśli obecna
+2. Opcja `api-server` (jawna — używana dosłownie, bez przepisywania schematu)
+3. **Wynik rozwiązywania HTTPS-first** (`hbbs_http::api_base::resolve`), cache 1 h:
+   `https://host` → `https://host:21114` (jeśli `allow-https-21114=Y`) → `https://host:5443` →
+   `http://host:21114` → `http://host:21121`. Wygrywa pierwszy kandydat, który odpowie
+   `GET /api/health` 2xx. Plaintext jest pomijany, chyba że operator włączy
+   `allow-insecure-tls-fallback=Y`.
+4. Z `custom-rendezvous-server`: host z portem **−2** (21114) jako `http://…` — ścieżka
+   zgodności, używana tylko gdy rozwiązywanie jeszcze nic nie zapisało
+5. Domyślnie **pusty string** (BetterDesk nie używa `admin.rustdesk.com`)
+
+Cache jest unieważniany przy zmianie `custom-rendezvous-server`, przy udanym parowaniu i
+ręcznie (Settings → Network → Reset). Stan rozwiązania (base, schemat, latencja, ostatni błąd)
+pokazuje karta **Server connection** w Settings → Network.
+
+**Dlaczego tak:** serwer tylko-HTTPS (reverse proxy na 443) był wcześniej nieosiągalny dla
+brandingu/enrollmentu, mimo że sesje zdalne działały — najtrudniejszy do zdiagnozowania objaw.
 
 `is_public(url)` — host `rustdesk.com` lub `*.rustdesk.com`. Gdy `true`, sync w `hbbs_http::sync` **nie** woła heartbeat/sysinfo; audit też jest gated.
 
@@ -122,6 +136,25 @@ Auth konta / AB: zwykle `Authorization: Bearer {access_token}` z `LocalConfig`.
 | `/api/devices/register` | [`betterdesk.rs`](../src/hbbs_http/betterdesk.rs) | jak heartbeat gating | enrollment + `product_sku` / `conn_mode` / `tags` |
 | `/api/audit/{type}` | [`common.rs`](../src/common.rs) `get_audit_server` | tylko nie-public | audit POST |
 | `/api/branding` | [`betterdesk.rs`](../src/hbbs_http/betterdesk.rs) | publiczne (GET), bez loginu | Client Branding sync → LocalConfig `branding-*` (oba SKU) |
+| `/api/pairing/redeem` | [`pairing.rs`](../src/pairing.rs) | publiczne (POST), wymaga ważnego kodu | Kod 4–6 znaków → pełna konfiguracja połączenia (`signal`, `relay`, `api`, `key`) + enrollment |
+| `/api/pairing/config` | [`pairing.rs`](../src/pairing.rs) | publiczne (POST), wymaga ważnego kodu | Podgląd serwera bez rejestracji urządzenia (nie zużywa kodu) |
+| `/api/health` | [`api_base.rs`](../src/hbbs_http/api_base.rs) | publiczne (GET) | Sonda rozwiązywania API; decyduje, który schemat/port jest używany |
+
+### 4.3.2. Parowanie kodem (host + 6 znaków)
+
+Zamiast QR lub długiego ciągu konfiguracji użytkownik wpisuje **adres serwera** i **kod**
+pokazany przez operatora w panelu (`/pairing`). Klient:
+
+1. normalizuje wejście (`host`, `host:port`, `https://host`); odrzuca `user@host` i inne schematy,
+2. próbuje kolejno `https://host`, `https://host:21114`, `https://host:5443` (plaintext tylko
+   przy `allow-insecure-tls-fallback=Y`), po 4 s każda, maks. 10 s łącznie,
+3. weryfikuje, że serwer zgłasza ten sam host, którego wpisał użytkownik,
+4. zapisuje **wszystkie** opcje dopiero po kompletnej odpowiedzi (`signal` jest wymagany),
+5. czyści cache rozwiązywania API i uruchamia normalny branding + enrollment.
+
+Kod jest jednorazowy (TTL 10 min). Nie przyznaje uprawnień: urządzenie nadal przechodzi
+standardowy enrollment (ban, pending, dowód posiadania klucza). Szczegóły serwera:
+`BetterDesk/docs/CONNECTION_PORTS.md` §4.
 
 ### 4.3.1. Dualizm SKU — pola tożsamości (kontrakt panelu)
 
@@ -421,6 +454,10 @@ Preferuj **additive** zmiany; nie refaktoruj istniejących helperów bez potrzeb
 | Dispatch procesów | `src/core_main.rs` |
 | Heartbeat / sysinfo / strategy | `src/hbbs_http/sync.rs` |
 | BetterDesk branding / enrollment / SKU identity | `src/hbbs_http/betterdesk.rs` |
+| API base resolution (HTTPS-first, cache) | `src/hbbs_http/api_base.rs` |
+| Short-code pairing | `src/pairing.rs` |
+| Secret storage (OS key store) | `src/secure_store.rs` |
+| Update channels / signed feed | `src/updater/channel.rs`, `docs/UPDATE_CHANNELS.md` |
 | OIDC | `src/hbbs_http/account.rs` |
 | HTTP client Rust | `src/hbbs_http/http_client.rs` |
 | Opcje, porty, ipc_path | `libs/hbb_common/src/config.rs` |

@@ -12,6 +12,180 @@ void _showSuccess() {
   showToast(translate("Successful"));
 }
 
+/// "Connect with a code": server address + 6-character pairing code.
+///
+/// The client needs only these two values; the server answers with every endpoint the
+/// manual dialog would ask for. Deliberately not a QR substitute UI — the code path is
+/// for people typing on a keyboard, the QR path stays in the mobile scan page.
+void showPairingDialog(OverlayDialogManager dialogManager,
+    void Function(VoidCallback)? onPaired) async {
+  final hostCtrl = TextEditingController();
+  final codeCtrl = TextEditingController();
+  var busy = false;
+  var statusText = '';
+  var statusIsError = false;
+
+  dialogManager.show((setState, close, context) {
+    Future<void> submit() async {
+      final host = hostCtrl.text.trim();
+      final code = codeCtrl.text.trim();
+      if (host.isEmpty || code.isEmpty) {
+        setState(() {
+          statusIsError = true;
+          statusText = translate('Enter the server address and the code');
+        });
+        return;
+      }
+      setState(() {
+        busy = true;
+        statusText = translate('Connecting...');
+        statusIsError = false;
+      });
+      try {
+        await bind.mainSetCommon(key: 'pairing-input', value: '$host\n$code');
+        final raw = await bind.mainGetCommon(key: 'pairing-redeem');
+        final result = jsonDecode(raw);
+        if (result is! Map<String, dynamic>) {
+          throw 'invalid response';
+        }
+        if (result['ok'] != true) {
+          final key = result['error_key'] as String? ?? '';
+          setState(() {
+            busy = false;
+            statusIsError = true;
+            statusText = key.isEmpty
+                ? translate('Could not pair with the server')
+                : translate(_pairingErrorText(key));
+          });
+          return;
+        }
+        final serverName = (result['server_name'] as String?) ?? '';
+        final enrollment = (result['enrollment_status'] as String?) ?? '';
+        setState(() {
+          busy = false;
+          statusIsError = false;
+          statusText = serverName.isEmpty
+              ? translate('Connected')
+              : '${translate('Connected')}: $serverName'
+                  '${enrollment.isEmpty ? '' : ' ($enrollment)'}';
+        });
+        if (result['insecure'] == true) {
+          showToast(translate('Connected over plain HTTP. Enable HTTPS on the server.'));
+        }
+        onPaired?.call(() {});
+        // Keep the dialog open briefly so the operator sees the result, then close.
+        await Future.delayed(const Duration(milliseconds: 900));
+        close();
+      } catch (e) {
+        debugPrint('pairing failed: $e');
+        setState(() {
+          busy = false;
+          statusIsError = true;
+          statusText = translate('Could not pair with the server');
+        });
+      }
+    }
+
+    Widget field(String label, TextEditingController controller,
+        {bool autofocus = false,
+        int? maxLength,
+        TextCapitalization capitalization = TextCapitalization.none}) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: TextField(
+          controller: controller,
+          autofocus: autofocus,
+          maxLength: maxLength,
+          enabled: !busy,
+          textCapitalization: capitalization,
+          autocorrect: false,
+          enableSuggestions: false,
+          decoration: InputDecoration(
+            labelText: label,
+            counterText: '',
+            border: const OutlineInputBorder(),
+          ),
+          onSubmitted: (_) => submit(),
+        ),
+      );
+    }
+
+    return CustomAlertDialog(
+      title: Text(translate('Connect with a code')),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              translate(
+                  'Type the server address and the 6-character code shown in the BetterDesk console.'),
+              style: const TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            field(translate('Server address'), hostCtrl, autofocus: true),
+            field(translate('Pairing code'), codeCtrl,
+                maxLength: 6, capitalization: TextCapitalization.characters),
+            if (statusText.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    if (busy)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 8),
+                        child: SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    Expanded(
+                      child: Text(
+                        statusText,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: statusIsError ? Colors.redAccent : null,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        dialogButton('Cancel', onPressed: busy ? null : () => close(),
+            isOutline: true),
+        dialogButton('Connect', onPressed: busy ? null : () {
+          submit();
+        }),
+      ],
+    );
+  });
+}
+
+/// Maps a Rust-side pairing error key to the display text.
+String _pairingErrorText(String key) {
+  switch (key) {
+    case 'pairing-code-format':
+      return 'The code must be 6 characters (letters and digits, no 0, 1, O, I, L, U)';
+    case 'pairing-code-invalid':
+      return 'The code is invalid or has expired';
+    case 'pairing-host-required':
+      return 'Enter the server address, for example desk.example.com';
+    case 'pairing-host-mismatch':
+      return 'The server answered with a different address. Check the address and try again.';
+    case 'pairing-device-id-missing':
+      return 'This device has no ID yet. Start the service and try again.';
+    case 'pairing-server-unreachable':
+    default:
+      return 'Could not reach the server. Check the address and that HTTPS is enabled.';
+  }
+}
+
 void setTemporaryPasswordLengthDialog(
     OverlayDialogManager dialogManager) async {
   List<String> lengths = ['6', '8', '10'];

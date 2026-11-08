@@ -29,6 +29,39 @@ use std::{
 
 pub type SessionID = uuid::Uuid;
 
+/// Pending pairing input (`"host\ncode"` or JSON), set by the dialog before it asks for a
+/// redeem. Kept in a static because `mainGetCommon`/`mainSetCommon` are the only FFI
+/// surface available without regenerating the bridge, and the dialog is modal.
+lazy_static::lazy_static! {
+    static ref PAIRING_INPUT: std::sync::Mutex<(String, String)> =
+        std::sync::Mutex::new((String::new(), String::new()));
+}
+
+/// Run a pairing request using the stashed input. Returns the outcome JSON.
+fn run_pairing(preview_only: bool) -> String {
+    let (host, code) = {
+        let guard = PAIRING_INPUT.lock().unwrap_or_else(|e| e.into_inner());
+        guard.clone()
+    };
+    let runtime = match hbb_common::tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            return format!(
+                "{{\"ok\":false,\"error_key\":\"pairing-server-unreachable\",\"detail\":\"{}\"}}",
+                err.to_string().replace('"', "'")
+            );
+        }
+    };
+    if preview_only {
+        runtime.block_on(crate::pairing::preview(&host, &code)).to_json()
+    } else {
+        runtime.block_on(crate::pairing::redeem(&host, &code)).to_json()
+    }
+}
+
 lazy_static::lazy_static! {
     static ref TEXTURE_RENDER_KEY: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
 }
@@ -2695,6 +2728,36 @@ pub fn main_get_common(key: String) -> String {
         return ui_interface::is_permanent_password_set().to_string();
     } else if key == "local-permanent-password-set" {
         return ui_interface::is_local_permanent_password_set().to_string();
+    } else if key == "api-base-diagnostics" {
+        // Settings → Network diagnostics. Async path: probe fresh, bounded by RESOLVE_BUDGET.
+        let runtime = match hbb_common::tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                return format!(
+                    "{{\"base\":\"\",\"source\":\"none\",\"last_error\":\"{}\"}}",
+                    err.to_string().replace('"', "'")
+                );
+            }
+        };
+        return runtime
+            .block_on(crate::hbbs_http::api_base::resolve(true))
+            .to_json();
+    } else if key == "api-base-cached" {
+        return crate::hbbs_http::api_base::diagnostics_json();
+    } else if key == "update-check" {
+        // Settings → Updates. Network work stays off the synchronous FFI path.
+        return crate::updater::channel::check(false).to_json();
+    } else if key == "pairing-redeem" {
+        // Settings → Network → "Connect with a code". The dialog calls
+        // mainSetCommon(key: 'pairing-host'/'pairing-code') first.
+        return run_pairing(false);
+    } else if key == "pairing-preview" {
+        return run_pairing(true);
+    } else if key == "secrets-store-diagnostics" {
+        return crate::secure_store::diagnostics_json();
     } else {
         if key.starts_with("download-data-") {
             let id = key.replace("download-data-", "");
@@ -2753,6 +2816,39 @@ fn verified_update_artifact_for_release_page_url(
 }
 
 pub fn main_set_common(_key: String, _value: String) {
+    if _key == "reset-api-base-cache" {
+        crate::hbbs_http::api_base::reset_cache();
+        return;
+    }
+    if _key == "pairing-input" {
+        // The pairing dialog stashes host+code here, then reads `pairing-redeem`.
+        // Format: first line is the host, second line is the code.
+        let mut parts = _value.splitn(2, '\n');
+        let host = parts.next().unwrap_or_default().to_owned();
+        let code = parts.next().unwrap_or_default().to_owned();
+        *PAIRING_INPUT.lock().unwrap_or_else(|e| e.into_inner()) = (host, code);
+        return;
+    }
+    if _key == "update-check-force" {
+        // Explicit "Check now": bypasses the minimum interval but still runs on the
+        // async path, so a slow network never blocks the UI isolate.
+        let result = crate::updater::channel::check(true);
+        let _res = flutter::push_global_event(
+            flutter::APP_TYPE_MAIN,
+            serde_json::json!({ "name": "update-check", "result": result.to_json() }).to_string(),
+        );
+        return;
+    }
+    if _key == "update-channel" {
+        // Only the two known channels are accepted; an unknown value would silently make
+        // every check fail.
+        match _value.trim().to_ascii_lowercase().as_str() {
+            "stable" | "main" => crate::updater::channel::UpdateChannel::Stable.set_selected(),
+            "dev" | "development" => crate::updater::channel::UpdateChannel::Dev.set_selected(),
+            other => log::warn!("ignoring unknown update channel: {other}"),
+        }
+        return;
+    }
     #[cfg(target_os = "windows")]
     if _key == "install-printer" && crate::platform::is_win_10_or_greater() {
         std::thread::spawn(move || {
