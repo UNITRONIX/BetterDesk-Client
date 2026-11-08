@@ -50,7 +50,46 @@ pub fn signal_receiver() -> broadcast::Receiver<Vec<i32>> {
 fn start_hbbs_sync() -> broadcast::Sender<Vec<i32>> {
     let (tx, _rx) = broadcast::channel::<Vec<i32>>(16);
     std::thread::spawn(move || start_hbbs_sync_async());
+    start_initial_client_bootstrap();
     return tx;
+}
+
+/// Run branding + enrollment once, immediately, instead of waiting for the first
+/// `TIME_CONN` tick. Branding is what the home page and Settings → Branding render, so
+/// waiting up to a full interval looked like "the client never fetched branding".
+///
+/// Best effort and fully detached: a slow or unreachable server must not delay service
+/// start or the first heartbeat.
+#[cfg(not(any(target_os = "ios")))]
+fn start_initial_client_bootstrap() {
+    std::thread::spawn(|| {
+        // Move any legacy secrets out of the config file before anything reads them.
+        crate::secure_store::migrate_secrets_from_config();
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                log::warn!("Initial BetterDesk bootstrap skipped: {err}");
+                return;
+            }
+        };
+        runtime.block_on(async {
+            let resolved = crate::hbbs_http::api_base::resolve(false).await;
+            if resolved.base.is_empty() {
+                log::debug!("Initial BetterDesk bootstrap: no API base configured");
+                return;
+            }
+            log::debug!(
+                "Initial BetterDesk bootstrap via {} ({})",
+                resolved.base,
+                resolved.source.as_str()
+            );
+            crate::hbbs_http::betterdesk::sync_client_branding().await;
+            crate::hbbs_http::betterdesk::sync_device_enrollment().await;
+        });
+    });
 }
 
 #[derive(Debug, Serialize, Deserialize)]

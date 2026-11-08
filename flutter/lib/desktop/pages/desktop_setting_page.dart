@@ -13,6 +13,7 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
+import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
 import 'package:flutter_hbb/mobile/widgets/dialog.dart';
 import 'package:flutter_hbb/models/branding_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
@@ -58,6 +59,7 @@ enum SettingsTabKey {
   account,
   printer,
   branding,
+  update,
   about,
 }
 
@@ -81,6 +83,10 @@ class DesktopSettingPage extends StatefulWidget {
         bind.mainGetBuildinOption(key: kOptionHideRemotePrinterSetting) != 'Y')
       SettingsTabKey.printer,
     if (!bind.isDisableSettings()) SettingsTabKey.branding,
+    // Hidden for web (no installer) and for incoming-only Support Agents, whose updates
+    // are managed with the fleet rather than by the person using the device.
+    if (!isWeb && !bind.isIncomingOnly() && !bind.isDisableSettings())
+      SettingsTabKey.update,
     SettingsTabKey.about,
   ];
 
@@ -216,6 +222,10 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
           settingTabs.add(_TabInfo(
               tab, 'Branding', Icons.business_outlined, Icons.business));
           break;
+        case SettingsTabKey.update:
+          settingTabs.add(_TabInfo(
+              tab, 'Updates', Icons.system_update_outlined, Icons.system_update));
+          break;
         case SettingsTabKey.about:
           settingTabs
               .add(_TabInfo(tab, 'About', Icons.info_outline, Icons.info));
@@ -249,6 +259,9 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
           break;
         case SettingsTabKey.branding:
           children.add(const _Branding());
+          break;
+        case SettingsTabKey.update:
+          children.add(const _Updates());
           break;
         case SettingsTabKey.about:
           children.add(const _About());
@@ -1663,6 +1676,169 @@ class _Network extends StatefulWidget {
   State<_Network> createState() => _NetworkState();
 }
 
+/// Live view of how the client reached the BetterDesk API.
+///
+/// Without this an operator cannot tell "server is down" from "client picked HTTP but the
+/// server only serves HTTPS" — the two failures look identical from the UI.
+class _ServerConnectionCard extends StatefulWidget {
+  final VoidCallback onSettingsChanged;
+  const _ServerConnectionCard({required this.onSettingsChanged, Key? key})
+      : super(key: key);
+
+  @override
+  State<_ServerConnectionCard> createState() => _ServerConnectionCardState();
+}
+
+class _ServerConnectionCardState extends State<_ServerConnectionCard> {
+  Map<String, dynamic>? _info;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    if (!mounted) return;
+    setState(() => _busy = true);
+    try {
+      final raw = await bind.mainGetCommon(key: 'api-base-diagnostics');
+      final decoded = jsonDecode(raw);
+      if (mounted) {
+        setState(() => _info = decoded is Map<String, dynamic> ? decoded : null);
+      }
+    } catch (e) {
+      debugPrint('resolve api base failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _reset() async {
+    await bind.mainSetCommon(key: 'reset-api-base-cache', value: '');
+    await _refresh();
+    widget.onSettingsChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final base = (_info?['base'] as String?) ?? '';
+    final scheme = (_info?['scheme'] as String?) ?? '';
+    final insecure = _info?['insecure'] == true;
+    final latency = _info?['latency_ms'];
+    final lastError = _info?['last_error'] as String?;
+    final source = (_info?['source'] as String?) ?? 'none';
+
+    final summary = base.isEmpty
+        ? translate('No API server resolved')
+        : '$scheme://  $base';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 16, top: 10, bottom: 2),
+          child: Text(translate('Server connection'),
+              style: const TextStyle(fontSize: _kContentFontSize)),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 16, top: 2),
+          child: SelectableText(
+            summary,
+            style: TextStyle(
+              fontSize: 13,
+              color: insecure ? Colors.orange : null,
+            ),
+          ),
+        ),
+        if (latency is int && latency > 0)
+          Padding(
+            padding: const EdgeInsets.only(left: 16, top: 2),
+            child: Text('${translate('Latency')}: ${latency}ms',
+                style: const TextStyle(fontSize: 12)),
+          ),
+        if (insecure)
+          Padding(
+            padding: const EdgeInsets.only(left: 16, top: 4, right: 16),
+            child: Text(
+              translate('This connection is not encrypted. Enable HTTPS on the server.'),
+              style: const TextStyle(fontSize: 12, color: Colors.orange),
+            ),
+          ),
+        if (lastError != null && lastError.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 16, top: 4, right: 16),
+            child: Text(lastError,
+                style: const TextStyle(fontSize: 12, color: Colors.redAccent)),
+          ),
+        Padding(
+          padding: const EdgeInsets.only(left: 8, right: 8, top: 4, bottom: 8),
+          child: Wrap(
+            spacing: 4,
+            children: [
+              TextButton(
+                onPressed: _busy ? null : () => _refresh(),
+                child: Text(translate('Test again')),
+              ),
+              TextButton(
+                onPressed: _busy ? null : _reset,
+                child: Text(translate('Reset')),
+              ),
+              if (_busy)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        if (source == 'derived')
+          Padding(
+            padding: const EdgeInsets.only(left: 16, bottom: 8),
+            child: Text(translate('Automatically detected from the ID server'),
+                style: const TextStyle(fontSize: 12)),
+          ),
+        const Divider(height: 1, indent: 16, endIndent: 16),
+        Padding(
+          padding: const EdgeInsets.only(left: 16, top: 8, right: 16),
+          child: Text(translate('Secrets storage'),
+              style: const TextStyle(fontSize: _kContentFontSize)),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 16, top: 2, right: 16, bottom: 8),
+          child: FutureBuilder<String>(
+            future: bind.mainGetCommon(key: 'secrets-store-diagnostics'),
+            builder: (context, snapshot) {
+              final raw = snapshot.data;
+              String label = translate('Checking...');
+              if (raw != null) {
+                try {
+                  final decoded = jsonDecode(raw);
+                  final backend =
+                      decoded is Map ? decoded['backend'] as String? : null;
+                  label = backend == 'os'
+                      ? translate('System key store')
+                      : backend == 'config'
+                          ? translate(
+                              'Config fallback (system key store unavailable)')
+                          : translate('Unknown');
+                } catch (_) {
+                  label = translate('Unknown');
+                }
+              }
+              return Text(label, style: const TextStyle(fontSize: 12));
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
@@ -1789,6 +1965,16 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                   title: 'ID/Relay Server',
                   onTap: () => showServerSettings(gFFI.dialogManager, setState),
                 ),
+              if (!hideServer)
+                listTile(
+                  icon: Icons.pin_outlined,
+                  title: 'Connect with a code',
+                  onTap: () => showPairingDialog(gFFI.dialogManager, (_) {
+                    if (mounted) setState(() {});
+                  }),
+                ),
+              if (!hideServer) divider,
+              if (!hideServer) _ServerConnectionCard(onSettingsChanged: () => setState(() {})),
               if (!hideProxy && !hideServer) divider,
               if (!hideProxy)
                 listTile(
@@ -2717,6 +2903,189 @@ class _BrandingState extends State<_Branding> {
         const SizedBox(height: _kListViewBottomMargin),
       ],
     ).marginOnly(bottom: _kListViewBottomMargin);
+  }
+}
+
+/// Updates tab: channel selection (stable = `main`, dev) and install.
+///
+/// The check reads a signed appcast feed; nothing is downloaded or executed until the
+/// signature and the artifact hash both verify. A failed check is shown here rather than
+/// retried in the background.
+class _Updates extends StatefulWidget {
+  const _Updates({Key? key}) : super(key: key);
+
+  @override
+  State<_Updates> createState() => _UpdatesState();
+}
+
+class _UpdatesState extends State<_Updates> {
+  Map<String, dynamic>? _check;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _runCheck(force: false);
+  }
+
+  String _currentChannel() {
+    // Default mirrors the build: a dev build follows the dev channel until the operator
+    // changes it. Read from the same key the Rust side uses.
+    final stored = bind.mainGetLocalOption(key: 'update-channel');
+    if (stored == 'dev' || stored == 'stable') return stored;
+    return isWindows || isMacOS ? 'stable' : 'stable';
+  }
+
+  Future<void> _runCheck({required bool force}) async {
+    if (!mounted) return;
+    setState(() => _busy = true);
+    try {
+      if (force) {
+        await bind.mainSetCommon(key: 'update-check-force', value: '');
+        // The Rust side pushes `update-check`; poll briefly for the cached result.
+        for (var i = 0; i < 30; i++) {
+          await Future.delayed(const Duration(milliseconds: 500));
+          final raw = await bind.mainGetCommon(key: 'update-check');
+          final decoded = jsonDecode(raw);
+          if (mounted && decoded is Map<String, dynamic>) {
+            setState(() => _check = decoded);
+            if (decoded['has_update'] == true || decoded['error'] != null) break;
+          }
+        }
+      } else {
+        final raw = await bind.mainGetCommon(key: 'update-check');
+        final decoded = jsonDecode(raw);
+        if (mounted && decoded is Map<String, dynamic>) {
+          setState(() => _check = decoded);
+        }
+      }
+    } catch (e) {
+      debugPrint('update check failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _selectChannel(String channel) async {
+    await bind.mainSetCommon(key: 'update-channel', value: channel);
+    setState(() {});
+    await _runCheck(force: true);
+  }
+
+  Future<void> _install() async {
+    final releaseId = _check?['release_id'] as String?;
+    if (releaseId == null || releaseId.isEmpty) return;
+    final releasePageUrl =
+        'https://github.com/UNITRONIX/BetterDesk-Client/releases/tag/$releaseId';
+    await handleUpdate(releasePageUrl);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final channel = _currentChannel();
+    final version = bind.mainGetVersion();
+    final available = _check?['available_version'] as String?;
+    final hasUpdate = _check?['has_update'] == true;
+    final error = _check?['error'] as String?;
+    final size = _check?['size'];
+    final scrollController = ScrollController();
+
+    return ListView(controller: scrollController, children: [
+      _Card(title: 'Updates', children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 16, top: 10),
+              child: Text('${translate('Current version')}: $version'),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 16, top: 12),
+              child: Text(translate('Update channel'),
+                  style: const TextStyle(fontSize: _kContentFontSize)),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 16, top: 6),
+              child: Row(
+                children: [
+                  for (final entry in const [
+                    ('stable', 'Stable (main)'),
+                    ('dev', 'Development (dev)'),
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 16),
+                      child: Row(
+                        children: [
+                          Radio<String>(
+                            value: entry.$1,
+                            groupValue: channel,
+                            onChanged: _busy
+                                ? null
+                                : (value) {
+                                    if (value != null) _selectChannel(value);
+                                  },
+                          ),
+                          Text(entry.$2),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 16, top: 2, right: 16),
+              child: Text(
+                translate(
+                    'Stable follows main releases. Dev follows development builds and may be less reliable.'),
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+            const Divider(height: 24, indent: 16, endIndent: 16),
+            Padding(
+              padding: const EdgeInsets.only(left: 16),
+              child: Text(
+                error != null
+                    ? '${translate('Update check failed')}: $error'
+                    : hasUpdate
+                        ? '${translate('New version available')}: ${available ?? ''}'
+                            '${size is int && size > 0 ? ' (${(size / 1048576).toStringAsFixed(1)} MB)' : ''}'
+                        : translate('You are up to date'),
+                style: TextStyle(
+                  fontSize: _kContentFontSize,
+                  color: error != null ? Colors.redAccent : null,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 8, right: 8, top: 8, bottom: 12),
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  ElevatedButton(
+                    onPressed: _busy ? null : () => _runCheck(force: true),
+                    child: Text(translate('Check now')),
+                  ),
+                  if (hasUpdate)
+                    ElevatedButton(
+                      onPressed: _busy ? null : _install,
+                      child: Text(translate('Download and install')),
+                    ),
+                  if (_busy)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 12),
+                      child: SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ]).marginOnly(bottom: _kListViewBottomMargin),
+    ]);
   }
 }
 

@@ -1017,8 +1017,9 @@ pub fn is_modifier(evt: &KeyEvent) -> bool {
 }
 
 pub fn check_software_update() {
-    // BetterDesk: temporarily disable client update checks (no rustdesk.com / no auto-update).
-    *SOFTWARE_UPDATE_URL.lock().unwrap() = "".to_string();
+    // BetterDesk: the only update source is the signed appcast feed of this repository.
+    // Never derive a release URL from rustdesk.com; `updater::channel` owns discovery.
+    *SOFTWARE_UPDATE_URL.lock().unwrap() = String::new();
 }
 
 /// Validate a GitHub HTTPS release-tag URL used by signed update metadata (#15914).
@@ -1108,11 +1109,11 @@ fn clear_software_update_url() {
     *update_url = String::new();
 }
 
-// Official BetterDesk builds do not call rustdesk.com for updates.
+// BetterDesk builds never query rustdesk.com. Update discovery goes through the signed
+// appcast feed (`updater::channel`), which is why no release URL is recorded here.
 #[tokio::main(flavor = "current_thread")]
 pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
-    *SOFTWARE_UPDATE_URL.lock().unwrap() = "".to_string();
-    let _ = clear_software_update_url;
+    *SOFTWARE_UPDATE_URL.lock().unwrap() = String::new();
     Ok(())
 }
 
@@ -1210,6 +1211,13 @@ pub fn get_custom_rendezvous_server(custom: String) -> String {
 pub fn get_api_server(api: String, custom: String) -> String {
     if Config::no_register_device() {
         return "".to_owned();
+    }
+    // A previously resolved base already accounts for HTTPS-only servers; using it keeps
+    // synchronous callers (account, address book) on the same endpoint as background sync.
+    if api.is_empty() {
+        if let Some(base) = crate::hbbs_http::api_base::cached_base() {
+            return base;
+        }
     }
     let mut res = get_api_server_(api, custom);
     if res.ends_with('/') {

@@ -153,7 +153,15 @@ lazy_static::lazy_static! {
     static ref TELEMETRY_SERVER_KEY: Mutex<Option<(String, String, String, Instant)>> = Mutex::new(None);
 }
 
+/// The API base used by background sync (branding, enrollment, telemetry).
+///
+/// Prefers a resolved HTTPS base, then an explicit `api-server`, then the legacy
+/// derivation. Keeps working setups untouched: an operator who set `api-server` explicitly
+/// keeps exactly that string.
 fn api_base() -> String {
+    if let Some(base) = super::api_base::cached_base() {
+        return base.trim_end_matches('/').to_owned();
+    }
     let api = crate::get_api_server(
         Config::get_option("api-server"),
         Config::get_option("custom-rendezvous-server"),
