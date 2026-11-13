@@ -1,4 +1,4 @@
-//! BetterDesk-specific HTTP helpers for the official desktop client.
+﻿//! BetterDesk-specific HTTP helpers for the official desktop client.
 //!
 //! Branding sync (`/api/branding`), device enrollment (`/api/devices/register`),
 //! and health/server-key probes. Base URL comes from configured `api-server`.
@@ -44,6 +44,20 @@ const BRANDING_POLL_INTERVAL: Duration = Duration::from_secs(60);
 const TELEMETRY_KEY_POLL_INTERVAL: Duration = Duration::from_secs(3600);
 const OPTION_ENROLLMENT_STATUS: &str = "betterdesk-enrollment-status";
 const OPTION_ENROLLMENT_LAST_ATTEMPT: &str = "betterdesk-enrollment-last-attempt";
+/// Last human-readable server message (refusal reason, suggested device id).
+const OPTION_ENROLLMENT_MESSAGE: &str = "betterdesk-enrollment-message";
+/// Single-use enrollment token pasted by the operator (or baked into a bundle).
+/// Sent on registration so a managed/locked server admits this device without a
+/// manual Approve click.
+const OPTION_ENROLLMENT_TOKEN: &str = "betterdesk-enrollment-token";
+/// Device-bound credential issued by the server once the device is admitted.
+///
+/// It is what later proves this device's identity: the server only re-issues a
+/// token, accepts a self-service TOTP reset, or serves device-scoped help when
+/// the caller presents it (`hasBoundActiveDeviceToken`). Older builds dropped
+/// the value from the enrollment response, so a reinstall or a token rotation
+/// left the device unable to prove anything and requiring operator action.
+const OPTION_DEVICE_TOKEN: &str = "betterdesk-device-token";
 const ENROLLMENT_RETRY_SECS: u64 = 120;
 
 /// Applied SKU from bake-in (`conn-type: incoming` → Support Agent).
@@ -328,6 +342,185 @@ lazy_static::lazy_static! {
     static ref LAST_ENROLLMENT_POLL: Mutex<Option<Instant>> = Mutex::new(None);
 }
 
+/// Enrollment token handling (2026-11-13).
+///
+/// The server admits a new device through operator approval **or** a single-use
+/// enrollment token. Stock clients always relied on the approval path, but a
+/// managed/locked server cannot know about a device that never showed up in the
+/// Registrations queue — and an unattended install cannot click Approve. Sending
+/// the token lets such a device enrol by itself.
+///
+/// The token is single-use per device on the server, so it is cleared locally
+/// once the device reaches `approved`; keeping it would only make replay
+/// attempts (and confusing diagnostics) possible.
+pub fn set_enrollment_token(token: &str) {
+    let cleaned = token.trim();
+    if cleaned.is_empty() {
+        LocalConfig::set_option(OPTION_ENROLLMENT_TOKEN.to_owned(), String::new());
+        reset_enrollment_backoff();
+        return;
+    }
+    LocalConfig::set_option(OPTION_ENROLLMENT_TOKEN.to_owned(), cleaned.to_owned());
+    // A new token means the previous outcome no longer describes reality.
+    LocalConfig::set_option(OPTION_ENROLLMENT_STATUS.to_owned(), String::new());
+    LocalConfig::set_option(OPTION_ENROLLMENT_MESSAGE.to_owned(), String::new());
+    reset_enrollment_backoff();
+}
+
+/// Clear the retry timer so the next sync attempt runs immediately.
+///
+/// Without this, pasting a token (or an operator approving the device) would
+/// still wait out the current interval — up to an hour for a terminal state.
+fn reset_enrollment_backoff() {
+    *LAST_ENROLLMENT_POLL.lock().unwrap() = None;
+}
+
+/// The admission token currently in effect.
+///
+/// `LocalConfig` holds the durable copy (device-local file, never part of a
+/// server-pushed option set). A running daemon receives the value over IPC,
+/// which lands in `Config`, so that copy is read as a fallback: the CLI may set
+/// the token while the service is already running.
+pub fn enrollment_token() -> String {
+    let local = LocalConfig::get_option(OPTION_ENROLLMENT_TOKEN);
+    if !local.trim().is_empty() {
+        return local.trim().to_owned();
+    }
+    Config::get_option(OPTION_ENROLLMENT_TOKEN).trim().to_owned()
+}
+
+/// Human-readable enrolment state for the UI/diagnostics card.
+pub fn enrollment_state() -> &'static str {
+    match LocalConfig::get_option(OPTION_ENROLLMENT_STATUS).as_str() {
+        "approved" => "approved",
+        "pending" => "pending",
+        "rejected" => "rejected",
+        "banned" => "banned",
+        "removed" => "removed",
+        "identity-conflict" => "identity-conflict",
+        "awaiting-token-or-approval" => "awaiting-token-or-approval",
+        "token-rejected" => "token-rejected",
+        _ if !enrollment_token().is_empty() => "token-set",
+        _ => "unregistered",
+    }
+}
+
+/// Classify an enrolment refusal into a locally-stored state.
+///
+/// Two server generations answer differently: the Go server sends
+/// `status: "rejected"` with a human message ("Device is banned", "Device has
+/// been removed", "Enrollment is locked — a valid token is required"), while the
+/// Node panel-side endpoint used machine codes in `error`
+/// (`enrollment_proof_required`). Both are mapped here, and the message is
+/// keyword-matched, so diagnostics can distinguish "waiting for an operator"
+/// from "this device will never be admitted".
+///
+/// Returns `None` when the answer is not a refusal.
+fn classify_refusal(
+    http_status: u16,
+    error_code: Option<&str>,
+    message: &str,
+    token_present: bool,
+) -> Option<&'static str> {
+    let refused = matches!(http_status, 401 | 403) || error_code.is_some();
+    if !refused {
+        return None;
+    }
+    let admission = || {
+        if token_present {
+            "token-rejected"
+        } else {
+            "awaiting-token-or-approval"
+        }
+    };
+    let lowered = message.to_ascii_lowercase();
+    Some(match error_code {
+        Some("device_banned") => "banned",
+        Some("device_removed") => "removed",
+        Some("enrollment_proof_required") => admission(),
+        _ if lowered.contains("banned") => "banned",
+        _ if lowered.contains("removed") => "removed",
+        _ if lowered.contains("locked") => admission(),
+        _ => "rejected",
+    })
+}
+
+/// Enrolment retry pause for states an operator must resolve.
+///
+/// Retrying a pending device every two minutes is right: approval may arrive at
+/// any moment. Retrying a *banned*, *removed*, or *identity-conflicting* device
+/// is not — no retry can succeed until an operator acts, and the server logs the
+/// refusal each time. Back off to an hour so the device still recovers on its own
+/// after an operator fixes it, without flooding the server meanwhile.
+const ENROLLMENT_TERMINAL_RETRY_SECS: u64 = 3600;
+
+/// States that only an operator action (or a new identity) can leave.
+fn is_operator_action_state(state: &str) -> bool {
+    matches!(
+        state,
+        "banned" | "removed" | "identity-conflict" | "token-rejected"
+    )
+}
+
+/// Device-bound credential issued at enrollment (empty before that).
+pub fn device_token() -> String {
+    LocalConfig::get_option(OPTION_DEVICE_TOKEN).trim().to_owned()
+}
+
+fn store_device_token(token: &str) {
+    let token = token.trim();
+    if token.is_empty() || token == device_token() {
+        return;
+    }
+    LocalConfig::set_option(OPTION_DEVICE_TOKEN.to_owned(), token.to_owned());
+    log::info!("BetterDesk device credential stored (len={})", token.len());
+}
+
+/// Last server message for the current state (empty when there is none).
+pub fn enrollment_message() -> String {
+    LocalConfig::get_option(OPTION_ENROLLMENT_MESSAGE)
+}
+
+fn clear_enrollment_token() {
+    if !enrollment_token().is_empty() {
+        LocalConfig::set_option(OPTION_ENROLLMENT_TOKEN.to_owned(), String::new());
+        Config::set_option(OPTION_ENROLLMENT_TOKEN.to_owned(), String::new());
+    }
+}
+
+/// Push the token into the running service over IPC.
+///
+/// The CLI usually talks to a separate daemon process (installed service or the
+/// already-running tray app). Writing the config alone leaves that process on
+/// its old value until it restarts, so the enrolment retry could keep reporting
+/// "awaiting token" for hours after the operator set one.
+///
+/// Uses `ipc::set_option`, which reads the daemon's current option map first, so
+/// unrelated settings are preserved. Failures are expected when no daemon runs
+/// (portable/CLI-only use) and are only logged.
+pub fn push_enrollment_token_to_daemon(token: &str) {
+    let value = token.trim().to_owned();
+    // `ipc::set_option` builds its own Tokio runtime internally, which panics
+    // when an ambient runtime exists (Flutter FFI entry points can have one).
+    // A short-lived OS thread always starts with a clean runtime context.
+    let handle = std::thread::Builder::new()
+        .name("enrollment-token-ipc".to_owned())
+        .spawn(move || {
+            if value.is_empty() {
+                crate::ipc::set_option(OPTION_ENROLLMENT_TOKEN, "");
+            } else {
+                crate::ipc::set_option(OPTION_ENROLLMENT_TOKEN, &value);
+            }
+        });
+    match handle {
+        Ok(handle) => {
+            let _ = handle.join();
+            log::debug!("enrollment token pushed to daemon");
+        }
+        Err(err) => log::debug!("enrollment token IPC push skipped: {err}"),
+    }
+}
+
 /// POST `{api}/api/devices/register` for BetterDesk desktop / Support (incoming-only).
 ///
 /// Uses `device_type: betterdesk-desktop` so the server does **not** apply the
@@ -346,7 +539,15 @@ pub async fn sync_device_enrollment() {
     {
         let mut last = LAST_ENROLLMENT_POLL.lock().unwrap();
         if let Some(t) = *last {
-            if t.elapsed() < Duration::from_secs(ENROLLMENT_RETRY_SECS) {
+            // States in `is_operator_action_state` cannot change on their own, so
+            // they get a long pause instead of hammering the server every two
+            // minutes with a request that will be refused again.
+            let interval = if is_operator_action_state(&status) {
+                ENROLLMENT_TERMINAL_RETRY_SECS
+            } else {
+                ENROLLMENT_RETRY_SECS
+            };
+            if t.elapsed() < Duration::from_secs(interval) {
                 return;
             }
         }
@@ -375,11 +576,42 @@ pub async fn sync_device_enrollment() {
             "betterdesk-desktop"
         },
     });
+    // Admission / identity credential: without one a managed or locked server
+    // only offers the manual Approve path, and an unattended install would never
+    // appear online.
+    //
+    // Two credentials exist and they are not interchangeable in time: the
+    // single-use enrollment token admits a *new* device, and the device token the
+    // server issues on approval proves this device afterwards. The device token
+    // wins once stored — it is bound to the device id, so it keeps working for
+    // refreshes and for re-issuing a rotated credential.
+    //
+    // The server reads the value as `token` (`EnrollmentRequest.Token` in
+    // betterdesk-server/api/branding_handlers.go) or as a bearer credential.
+    // Sending an invented field name is silently ignored, which is exactly the
+    // failure mode that makes token enrolment look broken, so both spellings are
+    // sent: `token` for current servers, `enrollment_token` for older
+    // panel-side implementations that used that name.
+    let device_credential = device_token();
+    let admission_token = enrollment_token();
+    let credential = if device_credential.is_empty() {
+        admission_token
+    } else {
+        device_credential
+    };
+    if !credential.is_empty() {
+        body["token"] = Value::String(credential.clone());
+        body["enrollment_token"] = Value::String(credential.clone());
+    }
     merge_device_identity(&mut body);
 
     let url = format!("{base}/api/devices/register");
     let client = create_http_client_async_with_url(&url).await;
-    let resp = match client.post(&url).json(&body).send().await {
+    let mut request = client.post(&url).json(&body);
+    if !credential.is_empty() {
+        request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {credential}"));
+    }
+    let resp = match request.send().await {
         Ok(r) => r,
         Err(err) => {
             log::debug!("enrollment register skipped: {err}");
@@ -388,12 +620,73 @@ pub async fn sync_device_enrollment() {
     };
     let status_code = resp.status();
     let text = resp.text().await.unwrap_or_default();
-    if !(status_code.is_success() || status_code.as_u16() == 202 || status_code.as_u16() == 403) {
+    // Accept every documented answer: 200/202 (approved/pending), 403 (refused),
+    // 404/409 (unknown device, identity conflict). Anything else is a transport
+    // or proxy problem and is not worth a state change.
+    if !(status_code.is_success()
+        || matches!(status_code.as_u16(), 401 | 403 | 404 | 409))
+    {
         log::debug!("enrollment register HTTP {status_code}: {text}");
         return;
     }
 
     let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    let message = value.get("message").and_then(|v| v.as_str()).unwrap_or("");
+    let reason = value
+        .get("error")
+        .and_then(|v| v.as_str())
+        .filter(|value| !value.is_empty());
+    let token_present = !enrollment_token().is_empty() || !device_token().is_empty();
+
+    // 409 identity_conflict: another machine already owns this device ID. The
+    // server suggests a free one; record it so the operator can act instead of
+    // watching an endless retry loop. Checked before the refusal mapping because
+    // this answer also carries an `error` code.
+    if status_code.as_u16() == 409 || reason == Some("identity_conflict") {
+        let suggested = value
+            .get("suggested_device_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        log::warn!("BetterDesk enrollment identity conflict; suggested id={suggested}");
+        LocalConfig::set_option(
+            OPTION_ENROLLMENT_STATUS.to_owned(),
+            "identity-conflict".to_owned(),
+        );
+        LocalConfig::set_option(
+            OPTION_ENROLLMENT_LAST_ATTEMPT.to_owned(),
+            format!("{}", hbb_common::get_time()),
+        );
+        let note = if suggested.is_empty() {
+            message.to_owned()
+        } else {
+            format!("suggested_device_id={suggested}")
+        };
+        if !note.is_empty() {
+            LocalConfig::set_option(OPTION_ENROLLMENT_MESSAGE.to_owned(), note);
+        }
+        return;
+    }
+
+    if let Some(mapped) = classify_refusal(status_code.as_u16(), reason, message, token_present) {
+        log::warn!(
+            "BetterDesk enrollment refused ({status_code}): {} {message}",
+            reason.unwrap_or("rejected")
+        );
+        // A rejected token is kept on purpose: the operator pasted it, and
+        // dropping it would erase the only evidence of what was tried. Retrying
+        // it is harmless — the server never consumes a token that did not admit
+        // the device.
+        LocalConfig::set_option(OPTION_ENROLLMENT_STATUS.to_owned(), mapped.to_owned());
+        LocalConfig::set_option(
+            OPTION_ENROLLMENT_LAST_ATTEMPT.to_owned(),
+            format!("{}", hbb_common::get_time()),
+        );
+        if !message.is_empty() {
+            LocalConfig::set_option(OPTION_ENROLLMENT_MESSAGE.to_owned(), message.to_owned());
+        }
+        return;
+    }
+
     let enroll_status = value
         .get("status")
         .and_then(|v| v.as_str())
@@ -408,6 +701,13 @@ pub async fn sync_device_enrollment() {
         log::info!("BetterDesk enrollment status={enroll_status}");
     }
 
+    // Persist the device-bound credential the server issues on approval. It is
+    // the only way this install can later prove its identity (token refresh,
+    // device self-service), and older builds silently discarded it.
+    if let Some(issued) = value.get("device_token").and_then(|v| v.as_str()) {
+        store_device_token(issued);
+    }
+
     // Poll status when pending
     if enroll_status == "pending" {
         let status_url = format!("{base}/api/devices/register/status?device_id={device_id}");
@@ -417,9 +717,20 @@ pub async fn sync_device_enrollment() {
                     if let Some(s) = v.get("status").and_then(|x| x.as_str()) {
                         LocalConfig::set_option(OPTION_ENROLLMENT_STATUS.to_owned(), s.to_owned());
                     }
+                    if let Some(issued) = v.get("device_token").and_then(|x| x.as_str()) {
+                        store_device_token(issued);
+                    }
                 }
             }
         }
+    }
+
+    // The token is single-use on the server. Once the device is approved it can
+    // never be needed again, so drop it instead of retrying with a spent token.
+    let final_status = LocalConfig::get_option(OPTION_ENROLLMENT_STATUS);
+    if final_status == "approved" || enroll_status == "approved" {
+        clear_enrollment_token();
+        log::info!("BetterDesk enrollment approved; enrollment token cleared");
     }
 }
 
@@ -769,4 +1080,110 @@ pub async fn sync_client_branding() {
 #[allow(dead_code)]
 pub fn is_branding_managed_by_server() -> bool {
     is_server_managed()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refusal_is_none_for_success_answers() {
+        assert_eq!(classify_refusal(200, None, "", false), None);
+        assert_eq!(classify_refusal(202, None, "Waiting for operator approval", false), None);
+    }
+
+    #[test]
+    fn node_panel_codes_are_mapped() {
+        assert_eq!(
+            classify_refusal(403, Some("device_banned"), "This device is banned", false),
+            Some("banned")
+        );
+        assert_eq!(
+            classify_refusal(403, Some("device_removed"), "This device has been removed", false),
+            Some("removed")
+        );
+    }
+
+    #[test]
+    fn missing_admission_maps_to_awaiting_or_rejected_token() {
+        // No token pasted: the operator still has to approve or supply one.
+        assert_eq!(
+            classify_refusal(403, Some("enrollment_proof_required"), "", false),
+            Some("awaiting-token-or-approval")
+        );
+        // A token was pasted and the server still refused it.
+        assert_eq!(
+            classify_refusal(403, Some("enrollment_proof_required"), "", true),
+            Some("token-rejected")
+        );
+    }
+
+    #[test]
+    fn go_server_messages_are_mapped_without_error_codes() {
+        // The Go server answers `status: "rejected"` and carries no `error`.
+        assert_eq!(
+            classify_refusal(403, None, "Device is banned", false),
+            Some("banned")
+        );
+        assert_eq!(
+            classify_refusal(403, None, "Device has been removed", false),
+            Some("removed")
+        );
+        assert_eq!(
+            classify_refusal(403, None, "Device enrollment was rejected", false),
+            Some("rejected")
+        );
+        assert_eq!(
+            classify_refusal(
+                403,
+                None,
+                "Enrollment is locked — a valid token is required",
+                false
+            ),
+            Some("awaiting-token-or-approval")
+        );
+        assert_eq!(
+            classify_refusal(
+                403,
+                None,
+                "Enrollment is locked — a valid token is required",
+                true
+            ),
+            Some("token-rejected")
+        );
+    }
+
+    #[test]
+    fn operator_action_states_back_off() {
+        // These cannot change without an operator, so retrying every two minutes
+        // only floods the server with refusals.
+        for state in ["banned", "removed", "identity-conflict", "token-rejected"] {
+            assert!(is_operator_action_state(state), "{state} should back off");
+        }
+        // These can change on their own (operator approves, token arrives).
+        for state in ["pending", "unregistered", "awaiting-token-or-approval", "approved"] {
+            assert!(!is_operator_action_state(state), "{state} should retry soon");
+        }
+    }
+
+    #[test]
+    fn enrolment_state_covers_every_mapped_state() {
+        // Guards against a mapped state that the diagnostics card cannot name.
+        for state in [
+            "approved",
+            "pending",
+            "rejected",
+            "banned",
+            "removed",
+            "identity-conflict",
+            "awaiting-token-or-approval",
+            "token-rejected",
+        ] {
+            LocalConfig::set_option(OPTION_ENROLLMENT_STATUS.to_owned(), state.to_owned());
+            assert_eq!(enrollment_state(), state);
+        }
+        LocalConfig::set_option(OPTION_ENROLLMENT_STATUS.to_owned(), String::new());
+        LocalConfig::set_option(OPTION_ENROLLMENT_TOKEN.to_owned(), String::new());
+        assert_eq!(enrollment_state(), "unregistered");
+    }
 }

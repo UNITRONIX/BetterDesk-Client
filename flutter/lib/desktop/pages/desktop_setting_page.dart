@@ -1834,6 +1834,194 @@ class _ServerConnectionCardState extends State<_ServerConnectionCard> {
             },
           ),
         ),
+        const Divider(height: 1, indent: 16, endIndent: 16),
+        _EnrollmentCard(onSettingsChanged: widget.onSettingsChanged),
+      ],
+    );
+  }
+}
+
+/// Enrollment state + admission token for a managed BetterDesk server.
+///
+/// Without this card an operator has no way to enrol an unattended install, and
+/// — more importantly — no way to see *why* a device never shows up online. The
+/// server distinguishes "waiting for approval", "banned", "removed", and
+/// "token rejected"; those states used to be swallowed into a single silent
+/// failure.
+class _EnrollmentCard extends StatefulWidget {
+  final VoidCallback onSettingsChanged;
+  const _EnrollmentCard({required this.onSettingsChanged, Key? key})
+      : super(key: key);
+
+  @override
+  State<_EnrollmentCard> createState() => _EnrollmentCardState();
+}
+
+class _EnrollmentCardState extends State<_EnrollmentCard> {
+  Map<String, dynamic>? _info;
+  final _tokenController = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  @override
+  void dispose() {
+    _tokenController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final raw = await bind.mainGetCommon(key: 'betterdesk-enrollment-diagnostics');
+      final decoded = jsonDecode(raw);
+      if (mounted) {
+        setState(() => _info = decoded is Map<String, dynamic> ? decoded : null);
+      }
+    } catch (e) {
+      debugPrint('enrollment diagnostics failed: $e');
+    }
+  }
+
+  Future<void> _applyToken() async {
+    setState(() => _busy = true);
+    await bind.mainSetCommon(
+      key: 'betterdesk-enrollment-token',
+      value: _tokenController.text.trim(),
+    );
+    _tokenController.clear();
+    await _refresh();
+    widget.onSettingsChanged();
+    if (mounted) setState(() => _busy = false);
+  }
+
+  /// Human text for a state name. Kept as a translation lookup so all locales
+  /// can describe the state properly; an unknown key falls back to the raw name.
+  String _stateLabel(String state) {
+    switch (state) {
+      case 'approved':
+        return translate('Device is approved');
+      case 'pending':
+        return translate('Waiting for operator approval');
+      case 'banned':
+        return translate('Device is banned on the server');
+      case 'removed':
+        return translate('Device was removed on the server');
+      case 'rejected':
+        return translate('Enrollment was rejected');
+      case 'identity-conflict':
+        return translate('This device ID belongs to another machine');
+      case 'awaiting-token-or-approval':
+        return translate('Enter an enrollment token or approve this device in the panel');
+      case 'token-rejected':
+        return translate('The enrollment token was rejected');
+      case 'token-set':
+        return translate('Enrollment token saved, waiting for the server');
+      default:
+        return translate('Not enrolled yet');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = (_info?['state'] as String?) ?? 'unregistered';
+    final message = (_info?['message'] as String?) ?? '';
+    final hasDeviceCredential = _info?['has_device_credential'] == true;
+    final hasEnrollmentToken = _info?['has_enrollment_token'] == true;
+    final approved = state == 'approved';
+    final blocked = state == 'banned' || state == 'removed';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 16, top: 10, bottom: 2),
+          child: Text(translate('Server enrollment'),
+              style: const TextStyle(fontSize: _kContentFontSize)),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 16, top: 2, right: 16),
+          child: Text(
+            _stateLabel(state),
+            style: TextStyle(
+              fontSize: 13,
+              color: blocked ? Colors.redAccent : (approved ? Colors.green : null),
+            ),
+          ),
+        ),
+        if (message.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 16, top: 2, right: 16),
+            child: SelectableText(message,
+                style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          ),
+        Padding(
+          padding: const EdgeInsets.only(left: 16, top: 2, right: 16),
+          child: Text(
+            hasDeviceCredential
+                ? translate('Device credential: stored')
+                : translate('Device credential: not issued yet'),
+            style: const TextStyle(fontSize: 12),
+          ),
+        ),
+        // A banned or removed device can never be admitted by pasting a token,
+        // so the input would only invite a pointless retry loop.
+        if (!approved && !blocked)
+          Padding(
+            padding: const EdgeInsets.only(left: 16, right: 16, top: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _tokenController,
+                    obscureText: true,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: const OutlineInputBorder(),
+                      hintText: translate('Enrollment token'),
+                    ),
+                    onSubmitted: (_) => _applyToken(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: _busy ? null : _applyToken,
+                  child: Text(translate('Save')),
+                ),
+              ],
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.only(left: 8, right: 8, top: 4, bottom: 8),
+          child: Wrap(
+            spacing: 4,
+            children: [
+              TextButton(
+                onPressed: _busy ? null : _refresh,
+                child: Text(translate('Refresh')),
+              ),
+              if (hasEnrollmentToken)
+                TextButton(
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          setState(() => _busy = true);
+                          await bind.mainSetCommon(
+                            key: 'betterdesk-enrollment-token',
+                            value: '',
+                          );
+                          await _refresh();
+                          widget.onSettingsChanged();
+                          if (mounted) setState(() => _busy = false);
+                        },
+                  child: Text(translate('Clear token')),
+                ),
+            ],
+          ),
+        ),
       ],
     );
   }

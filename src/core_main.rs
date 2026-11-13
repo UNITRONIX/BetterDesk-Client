@@ -463,6 +463,38 @@ pub fn core_main() -> Option<CoreMainAction> {
         } else if args[0] == "--get-id" {
             println!("{}", crate::ipc::get_id());
             return None;
+        } else if args[0] == "--set-enrollment-token" {
+            // Non-privileged on purpose: the token is an admission credential the
+            // device presents to the server, not a local machine setting. It lets
+            // an unattended install (Docker image, golden image, MDM script)
+            // enrol without an operator clicking Approve. Push it to the running
+            // daemon as well, so the enrolment retry loop picks it up immediately
+            // instead of after the next process start.
+            if args.len() == 2 {
+                crate::hbbs_http::betterdesk::set_enrollment_token(&args[1]);
+                crate::hbbs_http::betterdesk::push_enrollment_token_to_daemon(&args[1]);
+                println!("Enrollment token saved.");
+            } else if args.len() == 1 {
+                crate::hbbs_http::betterdesk::set_enrollment_token("");
+                crate::hbbs_http::betterdesk::push_enrollment_token_to_daemon("");
+                println!("Enrollment token cleared.");
+            }
+            return None;
+        } else if args[0] == "--enrollment-status" {
+            // Print the state plus the last server message: a bare state name
+            // ("rejected") tells an operator nothing about what to fix.
+            let state = crate::hbbs_http::betterdesk::enrollment_state();
+            println!("{state}");
+            let message = crate::hbbs_http::betterdesk::enrollment_message();
+            if !message.is_empty() {
+                println!("message: {message}");
+            }
+            let device = crate::hbbs_http::betterdesk::device_token();
+            println!(
+                "device_credential: {}",
+                if device.is_empty() { "none" } else { "present" }
+            );
+            return None;
         } else if args[0] == "--set-id" {
             if is_cli_setting_change_disabled() {
                 println!("Settings are disabled!");

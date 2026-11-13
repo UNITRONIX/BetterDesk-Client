@@ -801,6 +801,21 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Config fallback (system key store unavailable)", ""),
         ("Checking...", ""),
         ("Unknown", ""),
+        ("Server enrollment", "سرور رجسٹریشن"),
+        ("Device is approved", "ڈیوائس منظور شدہ ہے"),
+        ("Waiting for operator approval", "آپریٹر کی منظوری کا انتظار"),
+        ("Device is banned on the server", "ڈیوائس سرور پر پابند ہے"),
+        ("Device was removed on the server", "ڈیوائس سرور سے ہٹا دی گئی"),
+        ("Enrollment was rejected", "رجسٹریشن مسترد ہو گئی"),
+        ("This device ID belongs to another machine", "یہ ID کسی دوسری ڈیوائس کی ہے"),
+        ("Enter an enrollment token or approve this device in the panel", "رجسٹریشن ٹوکن درج کریں یا پینل میں اس ڈیوائس کی منظوری دیں"),
+        ("The enrollment token was rejected", "رجسٹریشن ٹوکن مسترد ہو گیا"),
+        ("Enrollment token saved, waiting for the server", "ٹوکن محفوظ ہو گیا، سرور کا انتظار"),
+        ("Not enrolled yet", "ابھی رجسٹر نہیں ہوئی"),
+        ("Device credential: stored", "ڈیوائس اسناد: محفوظ"),
+        ("Device credential: not issued yet", "ڈیوائس اسناد: ابھی جاری نہیں ہوئیں"),
+        ("Enrollment token", "رجسٹریشن ٹوکن"),
+        ("Clear token", "ٹوکن صاف کریں"),
     ].iter().cloned().collect();
 }
 

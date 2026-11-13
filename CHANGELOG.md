@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Added
+- **Enrollment token support.** Settings → Network gains a "Server enrollment" card that
+  shows the current enrollment state (`approved`, `pending`, `banned`, `removed`,
+  `identity-conflict`, `token rejected`, …) and accepts a single-use admission token, so an
+  unattended install can enroll on a managed or locked server without an operator clicking
+  Approve. Also available headlessly: `--set-enrollment-token <token>` /
+  `--set-enrollment-token` (clears) / `--enrollment-status`. The token is a device-local
+  secret — server-pushed option strategies cannot set or clear it.
+- **Device credential persistence.** The `device_token` the server issues on approval is now
+  stored and presented on later requests. It is what proves this install's identity for token
+  refresh and device self-service; earlier builds discarded the value, so those operations
+  needed manual operator action after a reinstall.
+- **Refusal diagnostics for registration.** Banned, removed, rejected, locked, and
+  identity-conflict answers are mapped to distinct states, logged, and shown in the UI. A
+  state that only an operator can resolve (banned/removed/conflict/rejected token) backs the
+  retry off to an hour instead of retrying every two minutes against a server that will
+  refuse again.
 - **Updates settings tab with channels.** Settings → Updates selects `Stable (main)` or
   `Development (dev)`, shows the current version, checks on demand, and installs through the
   existing verified-update path. The choice is stored in `update-channel`; unknown values are
@@ -33,6 +49,9 @@
   page and Settings → Branding are populated before the first `TIME_CONN` interval.
 
 ### Fixed
+- **Dependency security updates.** `openssl` 0.10.72 → 0.10.82, `quinn-proto` 0.11.15 →
+  0.11.19, `quinn-udp` 0.5.14 → 0.5.16, clearing 11 RustSec advisories. `cargo audit` now
+  reports zero vulnerabilities.
 - **Windows service identity mismatch.** The MSI registered the service under the display
   name (`BetterDesk Client`) while the binary registered `BetterDesk-Client`, so stop,
   uninstall and upgrade could target a different service than the one running. The package now

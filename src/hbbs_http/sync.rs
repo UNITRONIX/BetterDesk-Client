@@ -450,6 +450,13 @@ fn strategy_option_locked(key: &str) -> bool {
     if matches!(key, "conn-type" | "remote-connection-mode") {
         return true;
     }
+    // The enrolment token is a local admission secret. A server that could set
+    // or clear it over heartbeat strategy would be able to enrol (or de-enrol)
+    // the device on the operator's behalf, which defeats the point of the
+    // credential.
+    if key == "betterdesk-enrollment-token" {
+        return true;
+    }
     // Support Agent: never accept server/network flips that would leave incoming-only fleet.
     if config::is_incoming_only() {
         matches!(

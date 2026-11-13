@@ -2747,6 +2747,21 @@ pub fn main_get_common(key: String) -> String {
             .to_json();
     } else if key == "api-base-cached" {
         return crate::hbbs_http::api_base::diagnostics_json();
+    } else if key == "betterdesk-enrollment-diagnostics" {
+        // Settings → Network → enrolment card. Reports the local admission state
+        // and whether a device credential exists, without ever echoing either
+        // secret to the UI layer.
+        let state = crate::hbbs_http::betterdesk::enrollment_state();
+        let message = crate::hbbs_http::betterdesk::enrollment_message();
+        let has_device_credential = !crate::hbbs_http::betterdesk::device_token().is_empty();
+        let has_enrollment_token = !crate::hbbs_http::betterdesk::enrollment_token().is_empty();
+        return serde_json::json!({
+            "state": state,
+            "message": message,
+            "has_device_credential": has_device_credential,
+            "has_enrollment_token": has_enrollment_token,
+        })
+        .to_string();
     } else if key == "update-check" {
         // Settings → Updates. Network work stays off the synchronous FFI path.
         return crate::updater::channel::check(false).to_json();
@@ -2818,6 +2833,14 @@ fn verified_update_artifact_for_release_page_url(
 pub fn main_set_common(_key: String, _value: String) {
     if _key == "reset-api-base-cache" {
         crate::hbbs_http::api_base::reset_cache();
+        return;
+    }
+    if _key == "betterdesk-enrollment-token" {
+        // Set from Settings → Network (or a provisioning script). Same code path
+        // as `--set-enrollment-token`, so the running daemon learns the value
+        // immediately instead of on its next restart.
+        crate::hbbs_http::betterdesk::set_enrollment_token(&_value);
+        crate::hbbs_http::betterdesk::push_enrollment_token_to_daemon(&_value);
         return;
     }
     if _key == "pairing-input" {
