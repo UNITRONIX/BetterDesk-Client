@@ -788,6 +788,19 @@ jobs:
           RUST_TOOLCHAIN_VERSION=$(cargo --version | awk '{print $2}')
           echo "RUST_TOOLCHAIN_VERSION=$RUST_TOOLCHAIN_VERSION" >> $GITHUB_ENV
 
+      # This job had no Rust cache at all, so every run recompiled ~500 crates
+      # from scratch (~20-40 min with lto = true and codegen-units = 1). The
+      # other platform jobs already cache; keying on the target keeps the two
+      # Linux arches from evicting each other.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: linux-${{ matrix.job.target }}
+          # The release profile is lto + codegen-units = 1, so the build dir is
+          # large; cache it whole so the link step is incremental too.
+          cache-targets: true
+          cache-on-failure: true
+
       - name: Disable rust bridge build
         run: |
           # only build cdylib
@@ -930,8 +943,13 @@ jobs:
             # The release step keeps Cargo.lock in step with the rewritten
             # crate version, so --locked is valid here.
             cargo build --locked --lib $JOBS --features hwcodec,flutter,unix-file-copy-paste --release
-            rm -rf target/release/deps target/release/build
-            rm -rf ~/.cargo
+            # Keep target/release/{deps,build} so the rust-cache step after this
+            # action can persist them; this job used to delete them on every run
+            # and recompiled ~500 crates from scratch each time. Only /workspace
+            # is mounted into the container, so the crate registry in ~/.cargo
+            # stays container-local; swatinem/rust-cache still restores it from
+            # the host cache into the next container via the shared path.
+            du -sh /workspace/target 2>/dev/null || true
 
             # Setup Flutter
             # disable git safe.directory
