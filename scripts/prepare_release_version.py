@@ -52,6 +52,23 @@ def apply_version(root: Path, version: str, build_number: int) -> None:
         raise SystemExit("Could not update version in Cargo.toml")
     cargo_path.write_text(updated, encoding="utf-8")
 
+    # Cargo.lock records this package's own version too, and every build here
+    # passes --locked, which refuses to touch a stale lock. Rewrite just that
+    # entry so the lock stays valid without re-resolving the whole graph.
+    lock_path = root / "Cargo.lock"
+    if lock_path.is_file():
+        lock = lock_path.read_text(encoding="utf-8")
+        # The workspace member block is `name = "rustdesk"` followed by a
+        # version line, with no `source` (local path dependencies have none).
+        updated_lock, lock_count = re.subn(
+            r'(\[\[package\]\]\nname = "rustdesk"\nversion = ")[^"]+(")',
+            rf'\g<1>{version}\g<2>',
+            lock,
+            count=1,
+        )
+        if lock_count == 1:
+            lock_path.write_text(updated_lock, encoding="utf-8")
+
     pubspec_path = root / "flutter" / "pubspec.yaml"
     pubspec = pubspec_path.read_text(encoding="utf-8")
     existing = re.search(r"^version:\s*[^\s+]+(?:\+(\d+))?", pubspec, re.MULTILINE)
