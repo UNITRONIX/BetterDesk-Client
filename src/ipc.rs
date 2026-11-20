@@ -2127,10 +2127,27 @@ pub async fn clear_wayland_screencast_restore_token(key: String) -> ResultType<b
     feature = "flutter",
     not(any(target_os = "android", target_os = "ios"))
 ))]
-#[tokio::main(flavor = "current_thread")]
-pub async fn update_controlling_session_count(count: usize) -> ResultType<()> {
-    let mut c = connect(1000, "").await?;
-    c.send(&Data::ControllingSessionCount(count)).await?;
+pub fn update_controlling_session_count(count: usize) -> ResultType<()> {
+    // Never use #[tokio::main] here: flutter may already be driving a runtime on
+    // this thread (configured clients that open a session). Nested runtimes panic
+    // with "Cannot start a runtime from within a runtime" (#519).
+    std::thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                log::warn!("Controlling session count update skipped: {err}");
+                return;
+            }
+        };
+        let _ = runtime.block_on(async move {
+            if let Ok(mut c) = connect(1000, "").await {
+                let _ = c.send(&Data::ControllingSessionCount(count)).await;
+            }
+        });
+    });
     Ok(())
 }
 
