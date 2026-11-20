@@ -37,6 +37,9 @@ jobs:
   package:
     name: Package and verify generic agents
     needs: build
+    # One matrix leg (macOS arm64) is often cancelled for lack of a runner; still
+    # package whatever did build. Completeness check below refuses any other gap.
+    if: always() && needs.build.result != 'cancelled'
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -57,6 +60,25 @@ jobs:
             exit 1
           fi
 
+      # Same policy as betterdesk-desktop-release.yml: allow only the missing
+      # aarch64-apple-darwin leg (no macos-14 runner assigned since 8 Nov).
+      - name: Check build matrix completeness
+        if: needs.build.result != 'success'
+        run: |
+          set -euo pipefail
+          JOBS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion != "success" and .conclusion != null) | .name')"
+          echo "Non-successful jobs:"; echo "${JOBS}"
+          OTHER="$(printf '%s\n' "${JOBS}" | grep -v '^$' \
+            | grep -v 'aarch64-apple-darwin$' || true)"
+          if [ -n "${OTHER}" ]; then
+            echo "::error::Support build matrix finished with '${{ needs.build.result }}'; refusing to package a partial release. Also failed: ${OTHER}"
+            exit 1
+          fi
+          echo "::warning::Packaging without macOS arm64: no runner was assigned for that leg."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Download Windows x64
         uses: actions/download-artifact@v4
         with:
@@ -76,6 +98,7 @@ jobs:
           path: raw/macos-x86_64
 
       - name: Download macOS ARM64
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: betterdesk-unsigned-macos-aarch64
@@ -279,7 +302,11 @@ jobs:
           package_windows x86_64
           package_windows aarch64
           package_macos x86_64
-          package_macos aarch64
+          if [[ -d raw/macos-aarch64 ]]; then
+            package_macos aarch64
+          else
+            echo "::warning::Skipping macOS aarch64 packaging: artifact was not produced"
+          fi
           package_linux x86_64
           package_linux aarch64
 
@@ -340,7 +367,7 @@ jobs:
           path: out
 
   release:
-    if: startsWith(github.ref, 'refs/tags/support-v') || inputs.publish_release
+    if: always() && needs.package.result == 'success' && (startsWith(github.ref, 'refs/tags/support-v') || inputs.publish_release)
     needs: package
     runs-on: ubuntu-22.04
     permissions:

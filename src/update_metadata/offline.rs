@@ -46,6 +46,8 @@ pub(super) fn verify_offline_update_metadata_with_options(
             expected_package_id: options.requirements.expected_package_id,
             artifact_url_policy: ArtifactUrlPolicy::SignedHttps,
             trusted_keys: options.trusted_keys,
+            // Offline macOS path still verifies against the upstream RustDesk key set.
+            trust: super::UpdateTrust::RustDesk,
         },
     )?;
     if artifact.file_name != options.requirements.local_file_name {
