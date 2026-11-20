@@ -35,8 +35,11 @@ on:
 
 env:
   # Keep 1.75 on desktop Flutter/Windows (ABI / historical constraints from upstream).
-  RUST_VERSION: "1.75"
-  MAC_RUST_VERSION: "1.81" # https://github.com/yury/cidre requires 1.81
+  # 1.85 is the first stable release that understands edition2024 manifests.
+  # 1.75 cannot parse them at all: quinn-proto 0.11.19 pulls rand_pcg 0.10.2,
+  # and `cargo metadata` panics, which broke bridge generation (#484 release).
+  RUST_VERSION: "1.85"
+  MAC_RUST_VERSION: "1.85" # https://github.com/yury/cidre requires 1.81
   LLVM_VERSION: "15.0.6"
   FLUTTER_VERSION: "3.24.5"
   # Windows arm64 only: first stable Flutter with native arm64 Windows engine.

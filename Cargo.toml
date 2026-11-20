@@ -6,7 +6,7 @@ edition = "2021"
 build= "build.rs"
 description = "BetterDesk Remote Desktop"
 default-run = "rustdesk"
-rust-version = "1.75"
+rust-version = "1.85"
 
 [lib]
 name = "librustdesk"

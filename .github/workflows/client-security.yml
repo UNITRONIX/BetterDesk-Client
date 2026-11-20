@@ -47,7 +47,9 @@ permissions:
 
 env:
   # Rust pinned for Flutter/Windows ABI reasons; see flutter-build.yml.
-  RUST_VERSION: '1.75'
+  # 1.85 is the first stable release that understands edition2024 manifests;
+  # 1.75 fails on rand_pcg 0.10.2 (see bridge.yml).
+  RUST_VERSION: '1.85'
 
 concurrency:
   group: client-security-${{ github.ref }}
