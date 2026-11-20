@@ -359,8 +359,13 @@ def gen_upgrade_info():
                     'IncludeMinimum="yes" IncludeMaximum="yes" '
                 )
             else:
-                # Migrate from any version of a name-derived product.
-                version_range = ''
+                # Migrate from any version of a name-derived product. WiX 4
+                # requires Minimum or Maximum on every UpgradeVersion
+                # (WIX0044), and "any version" is expressed as a full range.
+                version_range = (
+                    'Minimum="0.0.0" Maximum="255.255.255" '
+                    'IncludeMinimum="yes" IncludeMaximum="yes" '
+                )
             upgrade_id = uuid.uuid5(uuid.NAMESPACE_OID, f"upgrade.{code}")
             blocks.append(
                 f'{indent}<Upgrade Id="{upgrade_id}">\n'

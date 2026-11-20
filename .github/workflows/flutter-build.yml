@@ -925,12 +925,11 @@ jobs:
               export JOBS=""
             fi
             echo $JOBS
-            # --offline, not --locked: the release step rewrites the crate
-            # version in Cargo.toml, so the lock's own entry for this package
-            # is one patch behind by the time we build. --locked aborts on
-            # that; --offline still forbids network access, so nothing is
-            # silently upgraded.
-            cargo build --offline --lib $JOBS --features hwcodec,flutter,unix-file-copy-paste --release
+            # --locked, not --offline: the git dependencies (hwcodec, wezterm,
+            # ...) are not vendored, so an offline build cannot load them.
+            # The release step keeps Cargo.lock in step with the rewritten
+            # crate version, so --locked is valid here.
+            cargo build --locked --lib $JOBS --features hwcodec,flutter,unix-file-copy-paste --release
             rm -rf target/release/deps target/release/build
             rm -rf ~/.cargo
 
