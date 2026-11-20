@@ -598,6 +598,7 @@ UINT __stdcall TryStopDeleteService(__in MSIHANDLE hInstall)
     DWORD cchExeFile = sizeof(szExeFile) / sizeof(szExeFile[0]);
     SERVICE_STATUS_PROCESS svcStatus;
     DWORD lastErrorCode = 0;
+    LPWSTR legacySvcName = NULL;
 
     hr = WcaInitialize(hInstall, "TryStopDeleteService");
     ExitOnFailure(hr, "Failed to initialize");
@@ -656,7 +657,6 @@ UINT __stdcall TryStopDeleteService(__in MSIHANDLE hInstall)
     // Packages from before the install-identity split registered a second, display-named
     // service, which the binary no longer looks for. Removing it here keeps one service
     // and one binary version on the host.
-    LPWSTR legacySvcName = NULL;
     if (SUCCEEDED(WcaReadStringFromCaData(&pwz, &legacySvcName)) &&
         legacySvcName != NULL && *legacySvcName != L'\0') {
         RemoveServiceW(legacySvcName);

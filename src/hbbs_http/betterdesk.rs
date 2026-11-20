@@ -375,6 +375,11 @@ fn reset_enrollment_backoff() {
     *LAST_ENROLLMENT_POLL.lock().unwrap() = None;
 }
 
+/// Clear the enrollment retry timer after a new pairing or token is applied.
+pub fn reset_device_enrollment_backoff() {
+    reset_enrollment_backoff();
+}
+
 /// The admission token currently in effect.
 ///
 /// `LocalConfig` holds the durable copy (device-local file, never part of a
@@ -1025,6 +1030,11 @@ pub async fn sync_client_branding() {
     let base = api_base();
     if base.is_empty() || crate::is_public(&base) {
         if is_server_managed() {
+            hbb_common::throttled_log!(
+                BRANDING_POLL_INTERVAL,
+                warn,
+                "clearing BetterDesk branding: no usable private API base"
+            );
             clear_server_branding();
         } else {
             LocalConfig::set_option(OPTION_BRANDING_SYNCED_API.to_owned(), "".to_owned());
@@ -1034,8 +1044,10 @@ pub async fn sync_client_branding() {
     }
 
     let synced = LocalConfig::get_option(OPTION_BRANDING_SYNCED_API);
-    if !synced.is_empty() && synced != base {
-        // API host changed — drop previous server branding.
+    if !synced.is_empty() && branding_api_identity(&synced) != branding_api_identity(&base) {
+        // A different API host changed the branding source. Scheme/port changes on the
+        // same host are expected when HTTPS probing replaces legacy port derivation.
+        log::info!("BetterDesk branding API changed from {synced} to {base}");
         clear_server_branding();
     }
 
@@ -1052,7 +1064,11 @@ pub async fn sync_client_branding() {
     let value = match fetch_branding().await {
         Ok(v) => v,
         Err(err) => {
-            log::debug!("branding fetch skipped: {err}");
+            hbb_common::throttled_log!(
+                BRANDING_POLL_INTERVAL,
+                warn,
+                "BetterDesk branding fetch failed: {err}"
+            );
             return;
         }
     };
@@ -1069,11 +1085,28 @@ pub async fn sync_client_branding() {
         && synced == base
         && is_server_managed()
     {
+        notify_branding_updated();
         return;
     }
     if let Err(err) = apply_branding_payload(&base, payload).await {
         log::warn!("branding apply failed: {err}");
     }
+}
+
+/// Force the next branding sync to fetch immediately, for example after pairing.
+pub fn refresh_client_branding() {
+    *LAST_BRANDING_POLL.lock().unwrap() = None;
+}
+
+fn branding_api_identity(value: &str) -> String {
+    if let Ok(url) = reqwest::Url::parse(value) {
+        return format!(
+            "{}{}",
+            url.host_str().unwrap_or_default().to_ascii_lowercase(),
+            url.path().trim_end_matches('/')
+        );
+    }
+    value.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 
 /// Whether Settings → Branding should be read-only (managed by server).
@@ -1164,6 +1197,22 @@ mod tests {
         for state in ["pending", "unregistered", "awaiting-token-or-approval", "approved"] {
             assert!(!is_operator_action_state(state), "{state} should retry soon");
         }
+    }
+
+    #[test]
+    fn equivalent_api_urls_keep_the_same_branding_identity() {
+        assert_eq!(
+            branding_api_identity("https://Panel.Example/"),
+            branding_api_identity("http://panel.example:21114")
+        );
+        assert_ne!(
+            branding_api_identity("https://panel.example"),
+            branding_api_identity("https://other.example")
+        );
+        assert_ne!(
+            branding_api_identity("https://panel.example/api/v1"),
+            branding_api_identity("https://panel.example/api/v2")
+        );
     }
 
     #[test]

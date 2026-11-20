@@ -197,6 +197,29 @@ python3 ./build.py --flutter --hwcodec
 
 ---
 
+## GitHub Actions release diagnostics
+
+The desktop release workflow computes one version in `prepare` and passes it to every
+platform build. It applies that value to `Cargo.toml` and `flutter/pubspec.yaml`, then
+uses the same value for artifact names, the signed update feed and MSI metadata.
+
+Common run states have different meanings:
+
+- **Skipped** — the event matched `paths-ignore` (documentation-only changes) or a job
+  condition was false; no build was attempted.
+- **Cancelled** — a newer run on the same branch replaced an older run because release
+  concurrency uses `cancel-in-progress: true`.
+- **Failed** — inspect the first failing matrix leg. Missing signing seeds, incomplete
+  artifacts, invalid release metadata or a missing Windows installer stop publication
+  deliberately.
+
+Development builds use the Cargo version plus the GitHub run number and a deterministic
+MSI revision. Stable builds increment the patch component and persist the resulting source
+version on `main` after a successful release, so the next real change starts from the
+newer version.
+
+---
+
 ## What this guide does not cover
 
 - Android / iOS / macOS / ARM builds

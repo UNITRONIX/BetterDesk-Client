@@ -24,6 +24,14 @@ on:
         description: "Exact source commit for an embedded Support build"
         type: string
         default: ""
+      version:
+        description: "Exact client version to embed in this build"
+        type: string
+        default: ""
+      msi-revision:
+        description: "Windows MSI revision for repeated development builds"
+        type: string
+        default: "0"
 
 env:
   # Keep 1.75 on desktop Flutter/Windows (ABI / historical constraints from upstream).
@@ -38,7 +46,8 @@ env:
   # vcpkg version: 2026.07.29 — if changed, run `$VCPKG_ROOT/vcpkg x-update-baseline`.
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VCPKG_CMAKE_VERSION: "4.3.0"
-  VERSION: "1.5.0"
+  VERSION: "${{ inputs.version || '1.5.0' }}"
+  BETTERDESK_MSI_REVISION: "${{ inputs.msi-revision || 0 }}"
   MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
   UPLOAD_ARTIFACT: "${{ inputs.upload-artifact }}"
   BETTERDESK_SUPPORT_CONFIG_B64: "${{ inputs.support-config-b64 }}"
@@ -111,6 +120,17 @@ jobs:
         with:
           ref: ${{ inputs.source-ref || github.sha }}
           submodules: recursive
+
+      - name: Prepare source version
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = python scripts/prepare_release_version.py --channel dev
+          }
+          python scripts/prepare_release_version.py --version $version --build-number $env:GITHUB_RUN_NUMBER --apply
+          "VERSION=$version" >> $env:GITHUB_ENV
+          "BETTERDESK_MSI_REVISION=${{ inputs.msi-revision || 0 }}" >> $env:GITHUB_ENV
 
       - name: Validate desktop packaging contract
         run: python scripts/validate_desktop_packaging.py
@@ -479,6 +499,20 @@ jobs:
           ref: ${{ inputs.source-ref || github.sha }}
           submodules: recursive
 
+      - name: Prepare source version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          if [ -z "${version}" ]; then
+            version="$(python3 scripts/prepare_release_version.py --channel dev)"
+          fi
+          python3 scripts/prepare_release_version.py \
+            --version "${version}" \
+            --build-number "${GITHUB_RUN_NUMBER}" \
+            --apply
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
+
       - name: Import the codesign cert
         if: env.MACOS_P12_BASE64 != null
         uses: apple-actions/import-codesign-certs@253ddeeac23f2bdad1646faac5c8c2832e800071 # v1
@@ -712,6 +746,20 @@ jobs:
         with:
           ref: ${{ inputs.source-ref || github.sha }}
           submodules: recursive
+
+      - name: Prepare source version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          if [ -z "${version}" ]; then
+            version="$(python3 scripts/prepare_release_version.py --channel dev)"
+          fi
+          python3 scripts/prepare_release_version.py \
+            --version "${version}" \
+            --build-number "${GITHUB_RUN_NUMBER}" \
+            --apply
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
 
       - name: Set Swap Space
         if: ${{ matrix.job.arch == 'x86_64' }}

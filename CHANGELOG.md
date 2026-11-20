@@ -47,6 +47,12 @@
   is only accepted when the operator enables `allow-insecure-tls-fallback`.
 - **Branding and enrollment run at startup**, not on the first heartbeat tick, so the home
   page and Settings → Branding are populated before the first `TIME_CONN` interval.
+- Pairing now updates the running desktop service through the same IPC path as manual
+  Network settings, then immediately starts device enrollment and branding sync.
+- BetterDesk device enrollment and branding remain available when session service
+  connections are stopped; account login is still required for address books and other
+  account-scoped features.
+- The Network tab puts **Connect with a code** before the full ID/Relay configuration.
 
 ### Fixed
 - **Dependency security updates.** `openssl` 0.10.72 → 0.10.82, `quinn-proto` 0.11.15 →
@@ -70,6 +76,11 @@
   still refuses any other repository.
 - **Update manifest URL.** The metadata URL was hardcoded to the upstream repository while
   release-tag validation already accepted this one; both now follow the release page.
+- **Branding persistence after API resolution.** Branding source comparisons now tolerate
+  HTTPS, legacy ports and equivalent API URLs instead of clearing a valid server profile.
+- **Release version drift.** GitHub Actions now computes one channel version for Cargo,
+  Flutter, artifacts, update feeds and MSI packages; stable releases persist the next source
+  version and development MSI revisions advance deterministically.
 
 ### Notes
 - `21116/tcp+udp` and `21117/tcp` must stay reachable: pairing configures the client but does

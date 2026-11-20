@@ -551,9 +551,13 @@ def init_global_vars(dist_dir, args):
 
     global g_version
     global g_build_date
-    g_version = args.version.replace("-", ".")
-    if g_version == "":
-        g_version = read_process_output("--version")
+    raw_version = args.version
+    if raw_version == "":
+        raw_version = read_process_output("--version")
+    # MSI ProductVersion has four numeric fields. Keep prerelease/build suffixes
+    # in the client metadata, but use the deterministic revision field for MSI
+    # upgrades instead of turning an arbitrary run number into that field.
+    g_version = raw_version.split("-", 1)[0]
     version_pattern = re.compile(r"\d+\.\d+\.\d+.*")
     if not version_pattern.match(g_version):
         print(f"Error: version {g_version} not found in {dist_app}")

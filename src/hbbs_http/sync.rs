@@ -155,6 +155,11 @@ async fn start_hbbs_sync_async() {
                     crate::hbbs_http::betterdesk::sync_device_enrollment().await;
                     continue;
                 }
+                // Device enrollment and branding are BetterDesk control-plane traffic,
+                // independent of the session service toggle. Keep reporting the device
+                // even when remote sessions are stopped.
+                crate::hbbs_http::betterdesk::sync_client_branding().await;
+                crate::hbbs_http::betterdesk::sync_device_enrollment().await;
                 if config::option2bool("stop-service", &Config::get_option("stop-service")) {
                     continue;
                 }

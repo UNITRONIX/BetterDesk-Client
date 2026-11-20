@@ -2149,17 +2149,17 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
             children: [
               if (!hideServer)
                 listTile(
-                  icon: Icons.dns_outlined,
-                  title: 'ID/Relay Server',
-                  onTap: () => showServerSettings(gFFI.dialogManager, setState),
-                ),
-              if (!hideServer)
-                listTile(
                   icon: Icons.pin_outlined,
                   title: 'Connect with a code',
                   onTap: () => showPairingDialog(gFFI.dialogManager, (_) {
                     if (mounted) setState(() {});
                   }),
+                ),
+              if (!hideServer)
+                listTile(
+                  icon: Icons.dns_outlined,
+                  title: 'ID/Relay Server',
+                  onTap: () => showServerSettings(gFFI.dialogManager, setState),
                 ),
               if (!hideServer) divider,
               if (!hideServer) _ServerConnectionCard(onSettingsChanged: () => setState(() {})),

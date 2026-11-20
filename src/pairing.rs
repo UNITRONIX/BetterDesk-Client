@@ -224,7 +224,7 @@ pub async fn redeem(host_input: &str, code: &str) -> PairOutcome {
         let url = format!("{base}/api/pairing/redeem");
         match attempt(&url, &body).await {
             Ok(Attempt::Accepted(response)) => {
-                return apply(&base, &authority, response);
+                return apply(&base, &authority, response).await;
             }
             Ok(Attempt::Rejected) => {
                 saw_rejection = true;
@@ -278,7 +278,7 @@ async fn attempt(url: &str, body: &Value) -> ResultType<Attempt> {
 ///
 /// Every option is validated first; only a complete bundle is written. A response missing
 /// the rendezvous endpoint would otherwise leave the client pointed at nothing.
-fn apply(base: &str, authority: &str, response: RedeemResponse) -> PairOutcome {
+async fn apply(base: &str, authority: &str, response: RedeemResponse) -> PairOutcome {
     let Some(connection) = response.connection else {
         return PairOutcome::failure("pairing-server-unreachable");
     };
@@ -321,9 +321,28 @@ fn apply(base: &str, authority: &str, response: RedeemResponse) -> PairOutcome {
     if !response.server_key.is_empty() {
         options.insert("key".to_owned(), response.server_key);
     }
-    Config::set_options(options);
+    // Pairing is initiated by the UI process, while the installed client may already
+    // have a running service with its own option map. Use the same IPC path as the
+    // manual Network settings so the service observes the new endpoints immediately.
+    let options_for_ipc = options.clone();
+    let ipc_result = std::thread::Builder::new()
+        .name("pairing-options-ipc".to_owned())
+        .spawn(move || crate::ui_interface::set_options(options_for_ipc));
+    match ipc_result {
+        Ok(handle) => {
+            if handle.join().is_err() {
+                log::warn!("pairing options IPC thread panicked");
+            }
+        }
+        Err(err) => {
+            log::warn!("pairing options IPC skipped: {err}");
+            Config::set_options(options);
+        }
+    }
     // A different server invalidates every cached probe from the previous one.
     crate::hbbs_http::api_base::reset_cache();
+    crate::hbbs_http::betterdesk::refresh_client_branding();
+    crate::hbbs_http::betterdesk::reset_device_enrollment_backoff();
 
     let server_name = response
         .branding
@@ -338,7 +357,7 @@ fn apply(base: &str, authority: &str, response: RedeemResponse) -> PairOutcome {
         .unwrap_or_default();
 
     log::info!("paired with {} ({})", base, if insecure { "http" } else { "https" });
-    PairOutcome {
+    let outcome = PairOutcome {
         ok: true,
         error_key: None,
         used_base: base.to_owned(),
@@ -346,7 +365,14 @@ fn apply(base: &str, authority: &str, response: RedeemResponse) -> PairOutcome {
         server_name,
         enrollment_status,
         insecure,
+    };
+    let resolved = crate::hbbs_http::api_base::resolve(true).await;
+    if resolved.base.is_empty() {
+        log::warn!("pairing succeeded but the BetterDesk API base could not be resolved");
     }
+    crate::hbbs_http::betterdesk::sync_client_branding().await;
+    crate::hbbs_http::betterdesk::sync_device_enrollment().await;
+    outcome
 }
 
 fn normalize_authority(value: &str) -> String {
