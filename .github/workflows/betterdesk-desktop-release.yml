@@ -168,11 +168,27 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Report incomplete build matrix
+      # The macOS arm64 leg is cancelled before it is scheduled (no `macos-14`
+      # runner is assigned, consistently since 8 Nov), and a failed matrix
+      # otherwise blocks every release. Allow that one gap explicitly: the
+      # download table skips absent assets, so no dead link is published.
+      # Any other non-successful job still aborts the release.
+      - name: Check build matrix completeness
         if: needs.build.result != 'success'
         run: |
-          echo "::error::Desktop build matrix finished with '${{ needs.build.result }}'; refusing to package a partial release."
-          exit 1
+          set -euo pipefail
+          JOBS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion != "success") | .name')"
+          echo "Non-successful jobs:"; echo "${JOBS}"
+          OTHER="$(printf '%s\n' "${JOBS}" | grep -v '^$' \
+            | grep -v '^build / aarch64-apple-darwin$' || true)"
+          if [ -n "${OTHER}" ]; then
+            echo "::error::Desktop build matrix finished with '${{ needs.build.result }}'; refusing to package a partial release. Also failed: ${OTHER}"
+            exit 1
+          fi
+          echo "::warning::Publishing without macOS arm64: no runner was assigned for that leg."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prepare source version
         run: |
