@@ -207,6 +207,71 @@ jobs:
             test -n "$deb"
             mkdir -p "stage/linux-${arch}/root"
             dpkg-deb -x "$deb" "stage/linux-${arch}/root"
+
+            # dpkg-deb -x extracts only the data archive, so the maintainer
+            # script that creates /usr/bin/betterdesk never runs. Without this
+            # the tarball has an empty usr/bin while the .desktop entries still
+            # launch `betterdesk` (issue #516).
+            #
+            # The symlink is RELATIVE on purpose: res/DEBIAN/postinst writes
+            # absolute /usr/share/rustdesk/... paths, which would be wrong for
+            # an archive unpacked under any other prefix.
+            local rootdir="stage/linux-${arch}/root"
+            install -d "${rootdir}/usr/bin"
+            ln -sfn ../share/rustdesk/betterdesk "${rootdir}/usr/bin/betterdesk"
+            ln -sfn ../share/rustdesk/betterdesk "${rootdir}/usr/bin/rustdesk"
+            test -x "${rootdir}/usr/share/rustdesk/betterdesk"
+
+            # The archive is documented as unpack-anywhere, so it needs its own
+            # installer and a short note; previously it shipped neither.
+            # printf (not a heredoc) keeps the YAML block scalar intact.
+            {
+              printf '%s\n' \
+                '#!/bin/sh' \
+                '# Install the BetterDesk Support client from this unpacked archive.' \
+                '# Honours PREFIX so it can be installed into a custom root.' \
+                'set -eu' \
+                'PREFIX="${PREFIX:-/usr/local}"' \
+                '# install.sh ships inside the root/ tree, next to usr/.' \
+                'HERE="$(cd "$(dirname "$0")" && pwd)"' \
+                'DEST="${DESTDIR:-}${PREFIX}/share/rustdesk"' \
+                '' \
+                'test -x "$HERE/usr/share/rustdesk/betterdesk" || {' \
+                '    echo "error: usr/share/rustdesk/betterdesk is missing from the archive" >&2' \
+                '    exit 1' \
+                '}' \
+                '' \
+                'install -d "$DEST" "${DESTDIR:-}${PREFIX}/bin"' \
+                'cp -a "$HERE/usr/share/rustdesk/." "$DEST/"' \
+                'ln -sfn "../share/rustdesk/betterdesk" "${DESTDIR:-}${PREFIX}/bin/betterdesk"' \
+                'ln -sfn "../share/rustdesk/betterdesk" "${DESTDIR:-}${PREFIX}/bin/rustdesk"' \
+                'echo "Installed to ${DESTDIR:-}${PREFIX}. Run: ${PREFIX}/bin/betterdesk"'
+            } > "${rootdir}/install.sh"
+            chmod 0755 "${rootdir}/install.sh"
+
+            {
+              printf '%s\n' \
+                'BetterDesk Support (generic Linux bundle)' \
+                '=========================================' \
+                '' \
+                'This archive is a raw filesystem tree under ./root.' \
+                '' \
+                'Run without installing:' \
+                '    ./root/usr/share/rustdesk/betterdesk' \
+                '' \
+                'Install system-wide (default PREFIX=/usr/local):' \
+                '    ./root/install.sh' \
+                'or:' \
+                '    PREFIX=/usr ./root/install.sh' \                '' \
+                'Why usr/bin/betterdesk is a symlink:' \
+                '    The .desktop entries run Exec=betterdesk, so the launcher must' \
+                '    be on PATH. The symlink is relative, which keeps this tree valid' \
+                '    under any prefix, including a plain unpack to a temp directory.' \
+                '' \
+                'Packaged from the Debian package data archive. Maintainer scripts are' \
+                'not included; install.sh performs the launcher step postinst would do.'
+            } > "${rootdir}/README.txt"
+
             ! find "stage/linux-${arch}" \( -iname custom.txt -o -name .custom-txt-here \) -print -quit | grep -q .
             tar -C "stage/linux-${arch}" -czf "out/betterdesk-support-generic-linux-${arch}.tar.gz" root
           }

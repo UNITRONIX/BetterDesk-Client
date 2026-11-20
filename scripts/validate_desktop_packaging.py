@@ -127,6 +127,45 @@ require("src/platform/macos.rs", macos_runtime, 'com.unitronix.{}_server.plist')
 release = read(".github/workflows/betterdesk-desktop-release.yml")
 require(".github/workflows/betterdesk-desktop-release.yml", release, 'betterdesk-unsigned-macos-${arch}')
 
+# ---------------------------------------------------------------------------
+# Issue #516: the generic Linux bundle is built with `dpkg-deb -x`, which
+# extracts only the data archive. The deb maintainer script (postinst) is what
+# creates /usr/bin/betterdesk, so it never runs and the tarball shipped an
+# empty usr/bin while its .desktop entries still ran `Exec=betterdesk %u`.
+# Nothing started after unpacking. These assertions keep the packaging step
+# honest: the launcher must be created explicitly, and it must be a relative
+# symlink because postinst hardcodes /usr/share/rustdesk/... paths that are
+# invalid for an archive unpacked under any other prefix.
+# ---------------------------------------------------------------------------
+generic_release = read(".github/workflows/betterdesk-support-generic-release.yml")
+require(
+    ".github/workflows/betterdesk-support-generic-release.yml",
+    generic_release,
+    "ln -sfn ../share/rustdesk/betterdesk",
+)
+require(
+    ".github/workflows/betterdesk-support-generic-release.yml",
+    generic_release,
+    "install -d",
+)
+if "dpkg-deb -x" not in generic_release:
+    failures.append(
+        "betterdesk-support-generic-release.yml: expected package_linux to extract the deb with dpkg-deb -x"
+    )
+# The bundle must not gain a step that runs absolute-path maintainer scripts.
+for banned in ("dpkg -i", "dpkg --install", "dpkg-deb -e"):
+    if banned in generic_release:
+        failures.append(
+            f"betterdesk-support-generic-release.yml: must not run {banned!r}; "
+            "it uses absolute /usr/share/rustdesk paths that break unpack-anywhere archives"
+        )
+# A shipped installer that honours PREFIX, plus a short README.
+require(".github/workflows/betterdesk-support-generic-release.yml", generic_release, "install.sh")
+require(".github/workflows/betterdesk-support-generic-release.yml", generic_release, 'PREFIX="${PREFIX:-/usr/local}"')
+require(".github/workflows/betterdesk-support-generic-release.yml", generic_release, "README.txt")
+# The launcher target must be verified to exist, not assumed.
+require(".github/workflows/betterdesk-support-generic-release.yml", generic_release, 'test -x "${rootdir}/usr/share/rustdesk/betterdesk"')
+
 if failures:
     print("\n".join(failures), file=sys.stderr)
     sys.exit(1)
