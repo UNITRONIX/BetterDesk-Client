@@ -20,7 +20,10 @@ use serde_derive::Serialize;
 use std::process::Child;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::Ordering,
+        Arc, Mutex,
+    },
 };
 
 use crate::common::SOFTWARE_UPDATE_URL;
@@ -87,6 +90,9 @@ fn online_status_reason_for(
     if needs_deploy {
         return "deployment_required";
     }
+    if crate::rendezvous_mediator::SERVER_NOT_SUPPORT.load(Ordering::SeqCst) {
+        return "server_not_support";
+    }
     if !has_rendezvous_server {
         return "no_rendezvous_server";
     }
@@ -100,8 +106,6 @@ fn online_status_reason_for(
 }
 
 fn online_status_reason(status_num: i64, key_confirmed: bool) -> String {
-    use std::sync::atomic::Ordering;
-
     online_status_reason_for(
         status_num,
         key_confirmed,

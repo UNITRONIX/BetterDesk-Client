@@ -52,6 +52,7 @@ static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static MANUAL_RESTARTED: AtomicBool = AtomicBool::new(false);
 static SENT_REGISTER_PK: AtomicBool = AtomicBool::new(false);
 pub(crate) static NEEDS_DEPLOY: AtomicBool = AtomicBool::new(false);
+pub(crate) static SERVER_NOT_SUPPORT: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "android")]
 static NOTIFIED_NEEDS_DEPLOY: AtomicBool = AtomicBool::new(false);
 // register_pk retry interval (ms) when device is awaiting deployment
@@ -435,6 +436,7 @@ impl RendezvousMediator {
                     Ok(register_pk_response::Result::OK) => {
                         Config::set_key_confirmed(true);
                         Config::set_host_key_confirmed(&self.host_prefix, true);
+                        SERVER_NOT_SUPPORT.store(false, Ordering::SeqCst);
                         *SOLVING_PK_MISMATCH.lock().await = "".to_owned();
                         NEEDS_DEPLOY.store(false, Ordering::SeqCst);
                         #[cfg(target_os = "android")]
@@ -457,8 +459,22 @@ impl RendezvousMediator {
                         #[cfg(target_os = "android")]
                         notify_android_needs_deploy();
                     }
+                    Ok(register_pk_response::Result::NOT_SUPPORT) => {
+                        // BetterDesk uses NOT_SUPPORT for a retained peer identity
+                        // whose public key no longer matches (for example after a
+                        // client reinstall). Do not report this as an unknown
+                        // response or keep advertising the device as confirmed.
+                        SERVER_NOT_SUPPORT.store(true, Ordering::SeqCst);
+                        Config::set_key_confirmed(false);
+                        Config::set_host_key_confirmed(&self.host_prefix, false);
+                        Config::update_latency(&self.host, -1);
+                        log::error!(
+                            "Server rejected registration for {}: the device ID is already registered with a different key, is deleted, or is blocked. Reset the device identity in the panel before registering again.",
+                            self.host_prefix
+                        );
+                    }
                     _ => {
-                        log::error!("unknown RegisterPkResponse");
+                        log::error!("Unhandled RegisterPkResponse: {:?}", rpr.result);
                     }
                 }
                 if rpr.keep_alive > 0 {

@@ -162,6 +162,9 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
                 : stateGlobal.svcStatus.value == SvcStatus.notReady &&
                         _statusReason.value == 'no_rendezvous_server'
                     ? translate("Failed to connect to rendezvous server")
+                    : stateGlobal.svcStatus.value == SvcStatus.notReady &&
+                            _statusReason.value == 'server_not_support'
+                        ? translate("server_not_support")
                     : stateGlobal.svcStatus.value == SvcStatus.notReady
                         ? translate("not_ready_status")
                         : translate('Ready');
