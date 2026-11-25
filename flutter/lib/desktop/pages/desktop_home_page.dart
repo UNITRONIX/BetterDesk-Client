@@ -362,6 +362,18 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     );
   }
 
+  String _genericSupportSetupError(Object error) {
+    final raw = error.toString();
+    if (raw.contains('CERTIFICATE_VERIFY_FAILED') ||
+        raw.contains('HandshakeException')) {
+      return 'The BetterDesk HTTPS certificate could not be verified. Ask the administrator to configure a trusted certificate.';
+    }
+    if (raw.contains('SocketException') || raw.contains('timed out')) {
+      return 'The BetterDesk server could not be reached. Check the address and network connection.';
+    }
+    return 'Could not connect to the BetterDesk server. Check the address and try again.';
+  }
+
   Future<bool> _configureGenericSupport() async {
     final input = _genericServerController.text.trim();
     Uri? parsed;
@@ -402,8 +414,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       if (mounted) setState(() => _genericSetupMessage = '');
       return true;
     } catch (error) {
+      debugPrint('Generic Support setup failed: $error');
       if (mounted) {
-        setState(() => _genericSetupMessage = error.toString().replaceFirst('Exception: ', ''));
+        setState(() => _genericSetupMessage = _genericSupportSetupError(error));
       }
       return false;
     } finally {
