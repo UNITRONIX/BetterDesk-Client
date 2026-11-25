@@ -56,6 +56,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   final _genericServerController = TextEditingController();
   var _genericSetupBusy = false;
   var _genericSetupMessage = '';
+  var _genericSetupDialogShown = false;
 
   final RxBool _editHover = false.obs;
   final RxBool _block = false.obs;
@@ -253,6 +254,80 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     );
   }
 
+  void _showGenericSupportSetupDialog() {
+    if (_genericSetupDialogShown ||
+        bind.mainGetOptionSync(key: 'api-server').trim().isNotEmpty) {
+      return;
+    }
+    _genericSetupDialogShown = true;
+
+    var dialogBusy = false;
+    var dialogMessage = '';
+
+    Future<void> submit(StateSetter setDialogState, VoidCallback close) async {
+      if (dialogBusy) {
+        return;
+      }
+      setDialogState(() => dialogBusy = true);
+      final configured = await _configureGenericSupport();
+      if (!mounted) {
+        return;
+      }
+      if (configured) {
+        close();
+        return;
+      }
+      setDialogState(() {
+        dialogBusy = false;
+        dialogMessage = _genericSetupMessage;
+      });
+    }
+
+    gFFI.dialogManager.show((setState, close, context) {
+      return CustomAlertDialog(
+        title: const Text('Connect BetterDesk Support'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Enter the public BetterDesk address. The server will provide the remaining configuration after activation.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _genericServerController,
+              autofocus: true,
+              keyboardType: TextInputType.url,
+              decoration: InputDecoration(
+                labelText: 'BetterDesk server',
+                hintText: 'https://support.example.com',
+                errorText: dialogMessage.isEmpty ? null : dialogMessage,
+              ),
+              onChanged: (_) {
+                if (dialogMessage.isNotEmpty) {
+                  setState(() => dialogMessage = '');
+                }
+              },
+              onSubmitted: (_) => submit(setState, close),
+            ),
+          ],
+        ),
+        actions: [
+          dialogButton('Cancel', onPressed: close, isOutline: true),
+          dialogButton(
+            'Connect',
+            onPressed: dialogBusy ? null : () => submit(setState, close),
+          ),
+        ],
+        onSubmit: dialogBusy ? null : () => submit(setState, close),
+        onCancel: close,
+      );
+    },
+        clickMaskDismiss: false,
+        backDismiss: false,
+        tag: 'generic-support-setup');
+  }
+
   Widget buildGenericPairingQr(BuildContext context) {
     final server = bind.mainGetOptionSync(key: 'api-server').trim();
     final deviceId = gFFI.serverModel.serverId.text.trim();
@@ -287,7 +362,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     );
   }
 
-  Future<void> _configureGenericSupport() async {
+  Future<bool> _configureGenericSupport() async {
     final input = _genericServerController.text.trim();
     Uri? parsed;
     try {
@@ -297,7 +372,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         !parsed.hasAuthority ||
         !{'http', 'https'}.contains(parsed.scheme.toLowerCase())) {
       setState(() => _genericSetupMessage = 'Use a valid http(s) server address.');
-      return;
+      return false;
     }
     final origin = Uri(
       scheme: parsed.scheme.toLowerCase(),
@@ -325,10 +400,12 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       await bind.mainSetOption(key: 'api-server', value: origin);
       await bind.mainSetOption(key: 'key', value: serverKey.trim());
       if (mounted) setState(() => _genericSetupMessage = '');
+      return true;
     } catch (error) {
       if (mounted) {
         setState(() => _genericSetupMessage = error.toString().replaceFirst('Exception: ', ''));
       }
+      return false;
     } finally {
       if (mounted) setState(() => _genericSetupBusy = false);
     }
@@ -988,7 +1065,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
       if (!isChattyMethod(call.method)) {
         debugPrint(
-          "[Main] call ${call.method} with args ${call.arguments} from window $fromWindowId");
+          "[Main] call ${call.method} with args ${call.arguments} from $fromWindowId");
       }
       if (call.method == kWindowMainWindowOnTop) {
         windowOnTop(null);
@@ -1060,6 +1137,10 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     if (bind.isIncomingOnly()) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _updateWindowSize();
+        if (bind.mainGetOptionSync(key: 'api-server').trim().isEmpty) {
+          windowOnTop(null);
+          _showGenericSupportSetupDialog();
+        }
       });
     }
     WidgetsBinding.instance.addObserver(this);
