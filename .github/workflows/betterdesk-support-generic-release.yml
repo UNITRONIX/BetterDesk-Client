@@ -39,7 +39,10 @@ jobs:
     needs: build
     # One matrix leg (macOS arm64) is often cancelled for lack of a runner; still
     # package whatever did build. Completeness check below refuses any other gap.
-    if: always() && needs.build.result != 'cancelled'
+    # The macOS ARM leg is intentionally allowed to be cancelled when GitHub
+    # has no compatible runner. The completeness check below rejects every
+    # other missing artifact, so packaging must still run after that cancellation.
+    if: always()
     runs-on: ubuntu-22.04
     permissions:
       contents: read
