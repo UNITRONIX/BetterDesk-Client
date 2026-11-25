@@ -21,6 +21,7 @@ import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/platform_channel.dart';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -57,6 +58,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   var _genericSetupBusy = false;
   var _genericSetupMessage = '';
   var _genericSetupDialogShown = false;
+  var _genericSelfSignedAvailable = false;
 
   final RxBool _editHover = false.obs;
   final RxBool _block = false.obs;
@@ -249,6 +251,15 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                   color: theme.colorScheme.error,
                 )),
           ],
+          if (_genericSelfSignedAvailable) ...[
+            const SizedBox(height: 8),
+            OutlinedButton(
+              onPressed: _genericSetupBusy
+                  ? null
+                  : () => _configureGenericSupport(acceptSelfSigned: true),
+              child: const Text('Accept self-signed certificate'),
+            ),
+          ],
         ],
       ),
     );
@@ -263,13 +274,16 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
     var dialogBusy = false;
     var dialogMessage = '';
+    var dialogSelfSignedAvailable = false;
 
-    Future<void> submit(StateSetter setDialogState, VoidCallback close) async {
+    Future<void> submit(StateSetter setDialogState, VoidCallback close,
+        {bool acceptSelfSigned = false}) async {
       if (dialogBusy) {
         return;
       }
       setDialogState(() => dialogBusy = true);
-      final configured = await _configureGenericSupport();
+      final configured =
+          await _configureGenericSupport(acceptSelfSigned: acceptSelfSigned);
       if (!mounted) {
         return;
       }
@@ -280,6 +294,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       setDialogState(() {
         dialogBusy = false;
         dialogMessage = _genericSetupMessage;
+        dialogSelfSignedAvailable = _genericSelfSignedAvailable;
       });
     }
 
@@ -310,10 +325,24 @@ class _DesktopHomePageState extends State<DesktopHomePage>
               },
               onSubmitted: (_) => submit(setState, close),
             ),
+            if (dialogSelfSignedAvailable) ...[
+              const SizedBox(height: 12),
+              const Text(
+                'This server uses a self-signed certificate. Accept it only if you trust this server.',
+                style: TextStyle(color: Colors.orange),
+              ),
+            ],
           ],
         ),
         actions: [
           dialogButton('Cancel', onPressed: close, isOutline: true),
+          if (dialogSelfSignedAvailable)
+            dialogButton(
+              'Accept self-signed certificate',
+              onPressed: dialogBusy
+                  ? null
+                  : () => submit(setState, close, acceptSelfSigned: true),
+            ),
           dialogButton(
             'Connect',
             onPressed: dialogBusy ? null : () => submit(setState, close),
@@ -374,7 +403,27 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     return 'Could not connect to the BetterDesk server. Check the address and try again.';
   }
 
-  Future<bool> _configureGenericSupport() async {
+  Future<http.Response> _fetchGenericServerKey(Uri uri,
+      {required bool acceptSelfSigned}) async {
+    if (!acceptSelfSigned || uri.scheme.toLowerCase() != 'https') {
+      return http.get(uri);
+    }
+    final expectedPort = uri.hasPort ? uri.port : 443;
+    final httpClient = HttpClient()
+      ..badCertificateCallback = (certificate, host, port) {
+        return host == uri.host &&
+            port == expectedPort &&
+            certificate.subject == certificate.issuer;
+      };
+    final client = IOClient(httpClient);
+    try {
+      return await client.get(uri);
+    } finally {
+      client.close();
+    }
+  }
+
+  Future<bool> _configureGenericSupport({bool acceptSelfSigned = false}) async {
     final input = _genericServerController.text.trim();
     Uri? parsed;
     try {
@@ -383,8 +432,12 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     if (parsed == null ||
         !parsed.hasAuthority ||
         !{'http', 'https'}.contains(parsed.scheme.toLowerCase())) {
-      setState(() => _genericSetupMessage = 'Use a valid http(s) server address.');
+      setState(
+          () => _genericSetupMessage = 'Use a valid http(s) server address.');
       return false;
+    }
+    if (!acceptSelfSigned) {
+      setState(() => _genericSelfSignedAvailable = false);
     }
     final origin = Uri(
       scheme: parsed.scheme.toLowerCase(),
@@ -396,7 +449,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       _genericSetupMessage = '';
     });
     try {
-      final response = await http.get(Uri.parse('$origin/api/server-key'));
+      final response = await _fetchGenericServerKey(
+          Uri.parse('$origin/api/server-key'),
+          acceptSelfSigned: acceptSelfSigned);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw Exception('Server key request failed (${response.statusCode}).');
       }
@@ -411,12 +466,23 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       await bind.mainSetOption(key: 'relay-server', value: authority);
       await bind.mainSetOption(key: 'api-server', value: origin);
       await bind.mainSetOption(key: 'key', value: serverKey.trim());
+      if (acceptSelfSigned) {
+        await bind.mainSetOption(
+            key: kOptionAllowInsecureTLSFallback, value: 'Y');
+      }
       if (mounted) setState(() => _genericSetupMessage = '');
+      if (mounted) setState(() => _genericSelfSignedAvailable = false);
       return true;
     } catch (error) {
       debugPrint('Generic Support setup failed: $error');
       if (mounted) {
-        setState(() => _genericSetupMessage = _genericSupportSetupError(error));
+        final raw = error.toString();
+        final isCertificateError = raw.contains('CERTIFICATE_VERIFY_FAILED') ||
+            raw.contains('HandshakeException');
+        setState(() {
+          _genericSelfSignedAvailable = !acceptSelfSigned && isCertificateError;
+          _genericSetupMessage = _genericSupportSetupError(error);
+        });
       }
       return false;
     } finally {
